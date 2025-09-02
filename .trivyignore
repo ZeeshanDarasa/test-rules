@@ -1,0 +1,153 @@
+# Trivy exclusion patterns
+# Vendor and dependency directories
+vendor/
+vendors/
+node_modules/
+.git/
+.github/
+dist/
+build/
+target/
+bin/
+obj/
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+coverage/
+.coverage/
+.nyc_output/
+logs/
+*.log
+*.tmp
+.DS_Store
+
+# Test directories and files
+**/test/**
+**/tests/**
+**/*test*
+**/*spec*
+**/*mock*
+**/*fixture*
+**/*example*
+**/*sample*
+
+# Documentation
+docs/
+documentation/
+*.md
+README*
+CHANGELOG*
+LICENSE*
+
+# Configuration files
+.gitignore
+.dockerignore
+.editorconfig
+.eslintrc*
+.prettierrc*
+tsconfig.json
+package-lock.json
+yarn.lock
+Pipfile.lock
+poetry.lock
+Gemfile.lock
+composer.lock
+go.sum
+Cargo.lock
+
+# Generated and compiled files
+*.min.js
+*.min.css
+*.bundle.js
+*.bundle.css
+*.map
+*.d.ts
+*.pyc
+*.pyo
+*.class
+*.jar
+*.war
+*.ear
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.lib
+*.a
+
+# Media files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.pdf
+*.mp4
+*.mp3
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm
+
+# Archive files
+*.zip
+*.tar
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Language-specific exclusions
+# Python
+*.egg-info/
+*.wheel
+site-packages/
+
+# Node.js
+bower_components/
+jspm_packages/
+
+# Java
+*.class
+target/
+.gradle/
+gradle/
+gradlew*
+
+# .NET
+packages/
+*.nupkg
+*.snupkg
+
+# Go
+go.mod
+go.sum
+
+# Ruby
+*.gem
+.bundle/
+
+# Rust
+target/
+Cargo.lock

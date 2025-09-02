@@ -1,0 +1,138 @@
+name: Semgrep Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  # Triggered by repository rulesets
+  repository_dispatch:
+    types: [security-scan, semgrep-scan]
+
+jobs:
+  semgrep:
+    name: Semgrep Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Run Semgrep
+        id: semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+            p/cwe-top-25
+          generateSarif: "1"
+          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
+        env:
+          SEMGREP_RULES: auto
+          SEMGREP_BASELINE_REF: ${{ github.base_ref || 'main' }}
+          # Exclude common vendor directories
+          SEMGREP_EXCLUDE: |
+            vendor/
+            vendors/
+            node_modules/
+            .git/
+            .github/
+            dist/
+            build/
+            target/
+            bin/
+            obj/
+            .venv/
+            venv/
+            __pycache__/
+            .pytest_cache/
+            coverage/
+            .coverage/
+            .nyc_output/
+            logs/
+            *.log
+            *.tmp
+            .DS_Store
+      
+      - name: Upload to DefectDojo
+        if: always()
+        run: |
+          if [ -f semgrep.sarif ]; then
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "scan_type=Semgrep JSON Report" \
+              -F "file=@semgrep.sarif" \
+              -F "product_name=${{ github.repository }}" \
+              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Semgrep SAST Scan - ${{ github.sha }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true" \
+              -F "push_to_jira=false" \
+              -F "minimum_severity=Info" \
+              -F "scan_date=$(date +%Y-%m-%d)" \
+              -F "tags=semgrep,sast,automated" || echo "Failed to upload to DefectDojo"
+          fi
+      
+      - name: Check for high/critical findings
+        if: always()
+        run: |
+          if [ -f semgrep.sarif ]; then
+            # Extract severity levels from SARIF and count high/critical findings
+            HIGH_CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error" or .ruleId | test(".*\\.(high|critical)$"))] | length' semgrep.sarif 2>/dev/null || echo "0")
+            
+            echo "High/Critical findings count: $HIGH_CRITICAL_COUNT"
+            
+            if [ "$HIGH_CRITICAL_COUNT" -gt 0 ]; then
+              echo "❌ Found $HIGH_CRITICAL_COUNT high/critical security findings!"
+              echo "Please review and fix the security issues before merging."
+              exit 1
+            else
+              echo "✅ No high/critical security findings detected."
+            fi
+          else
+            echo "⚠️ SARIF file not found, but continuing..."
+          fi
+      
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            if (fs.existsSync('semgrep.sarif')) {
+              const sarif = JSON.parse(fs.readFileSync('semgrep.sarif', 'utf8'));
+              const results = sarif.runs?.[0]?.results || [];
+              const highCritical = results.filter(r => 
+                r.level === 'error' || 
+                (r.ruleId && r.ruleId.match(/\.(high|critical)$/))
+              );
+              
+              const body = `## 🔍 Semgrep Security Scan Results
+              
+              **Total findings:** ${results.length}
+              **High/Critical findings:** ${highCritical.length}
+              
+              ${highCritical.length > 0 ? 
+                '❌ **Action Required:** Please address high/critical security findings before merging.' : 
+                '✅ **No high/critical security issues found.**'
+              }
+              
+              View detailed results in DefectDojo: ${{ secrets.DEFECTDOJO_URL }}`;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+            }

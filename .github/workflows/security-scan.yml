@@ -1,0 +1,408 @@
+name: Security Scan Suite
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  # Triggered by repository rulesets
+  repository_dispatch:
+    types: [security-scan, security-suite]
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of scan to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - semgrep
+        - trivy
+        - gitleaks
+
+jobs:
+  security-scan:
+    name: Security Scan Suite
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        scanner: 
+          - name: semgrep
+            enabled: ${{ github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'semgrep' || github.event.inputs.scan_type == '' }}
+          - name: trivy
+            enabled: ${{ github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'trivy' || github.event.inputs.scan_type == '' }}
+          - name: gitleaks
+            enabled: ${{ github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'gitleaks' || github.event.inputs.scan_type == '' }}
+    
+    steps:
+      - name: Checkout code
+        if: matrix.scanner.enabled
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Create exclusion patterns
+        if: matrix.scanner.enabled
+        run: |
+          # Create common exclusion patterns file
+          cat > .scan-exclusions << EOF
+          # Vendor and dependency directories
+          vendor/
+          vendors/
+          node_modules/
+          .git/
+          .github/
+          dist/
+          build/
+          target/
+          bin/
+          obj/
+          .venv/
+          venv/
+          __pycache__/
+          .pytest_cache/
+          coverage/
+          .coverage/
+          .nyc_output/
+          logs/
+          *.log
+          *.tmp
+          .DS_Store
+          # Test and documentation files
+          **/test/**
+          **/tests/**
+          **/*test*
+          **/*spec*
+          docs/
+          documentation/
+          *.md
+          # Lock and binary files
+          *.lock
+          *.sum
+          *.mod
+          *.png
+          *.jpg
+          *.jpeg
+          *.gif
+          *.svg
+          *.ico
+          *.pdf
+          *.zip
+          *.tar
+          *.gz
+          *.exe
+          *.dll
+          *.so
+          *.dylib
+          EOF
+      
+      # Semgrep Scan
+      - name: Run Semgrep
+        if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled
+        id: semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/secrets
+            p/owasp-top-ten
+            p/cwe-top-25
+          generateSarif: "1"
+          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
+        env:
+          SEMGREP_RULES: auto
+          SEMGREP_BASELINE_REF: ${{ github.base_ref || 'main' }}
+          SEMGREP_EXCLUDE_FILE: .scan-exclusions
+      
+      # Trivy Scan
+      - name: Create Trivy ignore file
+        if: matrix.scanner.name == 'trivy' && matrix.scanner.enabled
+        run: cp .scan-exclusions .trivyignore
+      
+      - name: Run Trivy vulnerability scanner
+        if: matrix.scanner.name == 'trivy' && matrix.scanner.enabled
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '/github/workspace'
+          scanners: 'vuln,secret,config'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          exit-code: '0'
+        env:
+          TRIVY_OFFLINE_SCAN: false
+          TRIVY_NO_PROGRESS: true
+      
+      # Gitleaks Scan
+      - name: Create Gitleaks configuration
+        if: matrix.scanner.name == 'gitleaks' && matrix.scanner.enabled
+        run: |
+          cat > .gitleaks.toml << EOF
+          title = "Gitleaks Configuration"
+          
+          [extend]
+          useDefault = true
+          
+          [allowlist]
+          description = "Global allowlist"
+          
+          paths = [
+            '''vendor/''',
+            '''vendors/''',
+            '''node_modules/''',
+            '''\.git/''',
+            '''\.github/''',
+            '''dist/''',
+            '''build/''',
+            '''target/''',
+            '''bin/''',
+            '''obj/''',
+            '''\.venv/''',
+            '''venv/''',
+            '''__pycache__/''',
+            '''\.pytest_cache/''',
+            '''coverage/''',
+            '''\.coverage/''',
+            '''\.nyc_output/''',
+            '''logs/''',
+            '''.*\.log$''',
+            '''.*\.tmp$''',
+            '''\.DS_Store''',
+            '''.*test.*''',
+            '''.*spec.*''',
+            '''.*mock.*''',
+            '''.*fixture.*''',
+            '''.*example.*''',
+            '''.*sample.*''',
+            '''README\.md''',
+            '''CHANGELOG\.md''',
+            '''LICENSE''',
+            '''\.gitignore''',
+            '''\.dockerignore''',
+          ]
+          
+          regexes = [
+            '''(?i)(test|example|sample|mock|fake|dummy|placeholder)''',
+            '''(?i)password.*=.*(test|example|123|password|admin)''',
+            '''(?i)token.*=.*(test|example|abc|xyz|123)''',
+            '''(?i)key.*=.*(test|example|abc|xyz|123)''',
+            '''AKIA[0-9A-Z]{16}.*test''',
+            '''sk_test_[0-9a-zA-Z]{24}''',
+            '''pk_test_[0-9a-zA-Z]{24}''',
+          ]
+          EOF
+      
+      - name: Run Gitleaks
+        if: matrix.scanner.name == 'gitleaks' && matrix.scanner.enabled
+        run: |
+          # Install gitleaks
+          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | sh -s -- -b /usr/local/bin
+          
+          # Run gitleaks with SARIF output
+          gitleaks detect \
+            --source=/github/workspace \
+            --config=.gitleaks.toml \
+            --report-format=sarif \
+            --report-path=gitleaks-results.sarif \
+            --exit-code=0 \
+            --verbose || true
+          
+          # Create empty SARIF if none exists
+          if [ ! -f gitleaks-results.sarif ]; then
+            cat > gitleaks-results.sarif << 'EOL'
+          {
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "Gitleaks",
+                    "version": "latest"
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          EOL
+          fi
+      
+      # Upload results to DefectDojo for each scanner
+      - name: Upload Semgrep to DefectDojo
+        if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled && always()
+        run: |
+          if [ -f semgrep.sarif ]; then
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "scan_type=Semgrep JSON Report" \
+              -F "file=@semgrep.sarif" \
+              -F "product_name=${{ github.repository }}" \
+              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Semgrep SAST Scan - ${{ github.sha }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true" \
+              -F "push_to_jira=false" \
+              -F "minimum_severity=Info" \
+              -F "scan_date=$(date +%Y-%m-%d)" \
+              -F "tags=semgrep,sast,automated,suite" || echo "Failed to upload Semgrep to DefectDojo"
+          fi
+      
+      - name: Upload Trivy to DefectDojo
+        if: matrix.scanner.name == 'trivy' && matrix.scanner.enabled && always()
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "scan_type=Trivy Scan" \
+              -F "file=@trivy-results.sarif" \
+              -F "product_name=${{ github.repository }}" \
+              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Trivy Vulnerability Scan - ${{ github.sha }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true" \
+              -F "push_to_jira=false" \
+              -F "minimum_severity=Info" \
+              -F "scan_date=$(date +%Y-%m-%d)" \
+              -F "tags=trivy,vulnerability,dependency,automated,suite" || echo "Failed to upload Trivy to DefectDojo"
+          fi
+      
+      - name: Upload Gitleaks to DefectDojo
+        if: matrix.scanner.name == 'gitleaks' && matrix.scanner.enabled && always()
+        run: |
+          if [ -f gitleaks-results.sarif ]; then
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "scan_type=Gitleaks Scan" \
+              -F "file=@gitleaks-results.sarif" \
+              -F "product_name=${{ github.repository }}" \
+              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Gitleaks Secret Scan - ${{ github.sha }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true" \
+              -F "push_to_jira=false" \
+              -F "minimum_severity=Info" \
+              -F "scan_date=$(date +%Y-%m-%d)" \
+              -F "tags=gitleaks,secrets,credentials,automated,suite" || echo "Failed to upload Gitleaks to DefectDojo"
+          fi
+      
+      # Check for high/critical findings
+      - name: Check Semgrep findings
+        if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled && always()
+        run: |
+          if [ -f semgrep.sarif ]; then
+            HIGH_CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error" or .ruleId | test(".*\\.(high|critical)$"))] | length' semgrep.sarif 2>/dev/null || echo "0")
+            echo "SEMGREP_HIGH_CRITICAL=$HIGH_CRITICAL_COUNT" >> $GITHUB_ENV
+            
+            if [ "$HIGH_CRITICAL_COUNT" -gt 0 ]; then
+              echo "❌ Semgrep found $HIGH_CRITICAL_COUNT high/critical security findings!"
+              exit 1
+            fi
+          fi
+      
+      - name: Check Trivy findings
+        if: matrix.scanner.name == 'trivy' && matrix.scanner.enabled && always()
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            HIGH_COUNT=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties."security-severity" == "8.0" or .properties."security-severity" == "9.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "CRITICAL" or .properties."security-severity" == "10.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            TOTAL_HIGH_CRITICAL=$((HIGH_COUNT + CRITICAL_COUNT))
+            echo "TRIVY_HIGH_CRITICAL=$TOTAL_HIGH_CRITICAL" >> $GITHUB_ENV
+            
+            if [ "$TOTAL_HIGH_CRITICAL" -gt 0 ]; then
+              echo "❌ Trivy found $TOTAL_HIGH_CRITICAL high/critical vulnerabilities!"
+              exit 1
+            fi
+          fi
+      
+      - name: Check Gitleaks findings
+        if: matrix.scanner.name == 'gitleaks' && matrix.scanner.enabled && always()
+        run: |
+          if [ -f gitleaks-results.sarif ]; then
+            SECRET_COUNT=$(jq '[.runs[].results[]] | length' gitleaks-results.sarif 2>/dev/null || echo "0")
+            echo "GITLEAKS_SECRETS=$SECRET_COUNT" >> $GITHUB_ENV
+            
+            if [ "$SECRET_COUNT" -gt 0 ]; then
+              echo "❌ Gitleaks found $SECRET_COUNT potential secrets!"
+              exit 1
+            fi
+          fi
+      
+      # Archive results
+      - name: Archive scan results
+        if: matrix.scanner.enabled && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.scanner.name }}-results
+          path: |
+            *.sarif
+            .gitleaks.toml
+            .trivyignore
+            .scan-exclusions
+          retention-days: 30
+
+  # Summary job that runs after all scanners complete
+  security-summary:
+    name: Security Scan Summary
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: always()
+    
+    permissions:
+      pull-requests: write
+      
+    steps:
+      - name: Create summary comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = ${{ toJSON(needs.security-scan.result) }};
+            const outcomes = ${{ toJSON(needs.security-scan.outputs) }};
+            
+            let summary = '## 🔒 Security Scan Suite Results\n\n';
+            summary += '| Scanner | Status | Findings |\n';
+            summary += '|---------|--------|----------|\n';
+            
+            const scanners = ['semgrep', 'trivy', 'gitleaks'];
+            let hasFailures = false;
+            
+            for (const scanner of scanners) {
+              const status = jobs === 'success' ? '✅ Passed' : '❌ Failed';
+              if (jobs !== 'success') hasFailures = true;
+              
+              let findings = 'N/A';
+              // Add specific findings count if available from environment
+              
+              summary += `| ${scanner} | ${status} | ${findings} |\n`;
+            }
+            
+            summary += '\n';
+            
+            if (hasFailures) {
+              summary += '❌ **Action Required:** Security issues found that need attention before merging.\n\n';
+              summary += 'Please review the detailed results in the Security tab and address any high/critical findings.\n';
+            } else {
+              summary += '✅ **All security scans passed!** No critical issues detected.\n';
+            }
+            
+            summary += `\n📊 View detailed results in DefectDojo: ${{ secrets.DEFECTDOJO_URL }}`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });

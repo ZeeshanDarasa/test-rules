@@ -1,0 +1,181 @@
+name: Trivy Vulnerability Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  # Triggered by repository rulesets
+  repository_dispatch:
+    types: [security-scan, trivy-scan]
+
+jobs:
+  trivy:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Create exclusion patterns file
+        run: |
+          cat > .trivyignore << EOF
+          # Vendor and dependency directories
+          vendor/
+          vendors/
+          node_modules/
+          .git/
+          .github/
+          dist/
+          build/
+          target/
+          bin/
+          obj/
+          .venv/
+          venv/
+          __pycache__/
+          .pytest_cache/
+          coverage/
+          .coverage/
+          .nyc_output/
+          logs/
+          *.log
+          *.tmp
+          .DS_Store
+          # Test files
+          **/test/**
+          **/tests/**
+          **/*test*
+          **/*spec*
+          # Documentation
+          docs/
+          documentation/
+          *.md
+          EOF
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '/github/workspace'
+          scanners: 'vuln,secret,config'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          exit-code: '0'  # Don't fail here, we'll handle it in the next step
+        env:
+          TRIVY_OFFLINE_SCAN: false
+          TRIVY_NO_PROGRESS: true
+          TRIVY_CACHE_DIR: /tmp/trivy-cache
+      
+      - name: Upload to DefectDojo
+        if: always()
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "scan_type=Trivy Scan" \
+              -F "file=@trivy-results.sarif" \
+              -F "product_name=${{ github.repository }}" \
+              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Trivy Vulnerability Scan - ${{ github.sha }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true" \
+              -F "push_to_jira=false" \
+              -F "minimum_severity=Info" \
+              -F "scan_date=$(date +%Y-%m-%d)" \
+              -F "tags=trivy,vulnerability,dependency,automated" || echo "Failed to upload to DefectDojo"
+          fi
+      
+      - name: Check for high/critical vulnerabilities
+        if: always()
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            # Count high and critical severity findings
+            HIGH_COUNT=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties."security-severity" == "8.0" or .properties."security-severity" == "9.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "CRITICAL" or .properties."security-severity" == "10.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            TOTAL_HIGH_CRITICAL=$((HIGH_COUNT + CRITICAL_COUNT))
+            
+            echo "High severity findings: $HIGH_COUNT"
+            echo "Critical severity findings: $CRITICAL_COUNT"
+            echo "Total high/critical findings: $TOTAL_HIGH_CRITICAL"
+            
+            if [ "$TOTAL_HIGH_CRITICAL" -gt 0 ]; then
+              echo "❌ Found $TOTAL_HIGH_CRITICAL high/critical vulnerabilities!"
+              echo "Please review and fix the vulnerabilities before merging."
+              
+              # Show summary of findings
+              echo "## Vulnerability Summary:"
+              jq -r '.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties.severity == "CRITICAL" or .properties."security-severity" >= "8.0")) | "- \(.ruleId): \(.message.text)"' trivy-results.sarif | head -20
+              
+              exit 1
+            else
+              echo "✅ No high/critical vulnerabilities detected."
+            fi
+          else
+            echo "⚠️ SARIF file not found, but continuing..."
+          fi
+      
+      - name: Generate detailed report
+        if: always()
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            echo "## Trivy Vulnerability Scan Summary" > trivy-summary.md
+            echo "" >> trivy-summary.md
+            
+            TOTAL_VULNS=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            HIGH_VULNS=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties."security-severity" == "8.0" or .properties."security-severity" == "9.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            CRITICAL_VULNS=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "CRITICAL" or .properties."security-severity" == "10.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            MEDIUM_VULNS=$(jq '[.runs[].results[] | select(.properties.severity == "MEDIUM" or .properties."security-severity" == "5.0")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            LOW_VULNS=$(jq '[.runs[].results[] | select(.properties.severity == "LOW" or .properties."security-severity" <= "3.0")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            echo "| Severity | Count |" >> trivy-summary.md
+            echo "|----------|-------|" >> trivy-summary.md
+            echo "| Critical | $CRITICAL_VULNS |" >> trivy-summary.md
+            echo "| High | $HIGH_VULNS |" >> trivy-summary.md
+            echo "| Medium | $MEDIUM_VULNS |" >> trivy-summary.md
+            echo "| Low | $LOW_VULNS |" >> trivy-summary.md
+            echo "| **Total** | **$TOTAL_VULNS** |" >> trivy-summary.md
+            echo "" >> trivy-summary.md
+            
+            if [ "$((CRITICAL_VULNS + HIGH_VULNS))" -gt 0 ]; then
+              echo "❌ **Action Required:** Please address high/critical vulnerabilities before merging." >> trivy-summary.md
+            else
+              echo "✅ **No high/critical vulnerabilities found.**" >> trivy-summary.md
+            fi
+          fi
+      
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            if (fs.existsSync('trivy-summary.md')) {
+              const summary = fs.readFileSync('trivy-summary.md', 'utf8');
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🔍 Trivy Vulnerability Scan Results\n\n${summary}\n\nView detailed results in DefectDojo: ${{ secrets.DEFECTDOJO_URL }}`
+              });
+            }
+      
+      - name: Cache Trivy DB
+        uses: actions/cache@v3
+        with:
+          path: /tmp/trivy-cache
+          key: ${{ runner.os }}-trivy-db-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-trivy-db-

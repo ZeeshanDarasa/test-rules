@@ -1,0 +1,269 @@
+name: Gitleaks Secret Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  # Triggered by repository rulesets
+  repository_dispatch:
+    types: [security-scan, gitleaks-scan]
+
+jobs:
+  gitleaks:
+    name: Gitleaks Secret Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Create Gitleaks configuration
+        run: |
+          cat > .gitleaks.toml << EOF
+          # Gitleaks configuration file
+          title = "Gitleaks Configuration"
+          
+          [extend]
+          # Use the default gitleaks rules
+          useDefault = true
+          
+          # Additional custom rules can be added here
+          
+          # Global allowlist
+          [allowlist]
+          description = "Global allowlist"
+          
+          # Exclude common false positives and vendor directories
+          paths = [
+            '''vendor/''',
+            '''vendors/''',
+            '''node_modules/''',
+            '''\.git/''',
+            '''\.github/''',
+            '''dist/''',
+            '''build/''',
+            '''target/''',
+            '''bin/''',
+            '''obj/''',
+            '''\.venv/''',
+            '''venv/''',
+            '''__pycache__/''',
+            '''\.pytest_cache/''',
+            '''coverage/''',
+            '''\.coverage/''',
+            '''\.nyc_output/''',
+            '''logs/''',
+            '''.*\.log$''',
+            '''.*\.tmp$''',
+            '''\.DS_Store''',
+            '''.*test.*''',
+            '''.*spec.*''',
+            '''.*mock.*''',
+            '''.*fixture.*''',
+            '''.*example.*''',
+            '''.*sample.*''',
+            '''README\.md''',
+            '''CHANGELOG\.md''',
+            '''LICENSE''',
+            '''\.gitignore''',
+            '''\.dockerignore''',
+          ]
+          
+          # Exclude common test/example secrets
+          regexes = [
+            '''(?i)(test|example|sample|mock|fake|dummy|placeholder)''',
+            '''(?i)password.*=.*(test|example|123|password|admin)''',
+            '''(?i)token.*=.*(test|example|abc|xyz|123)''',
+            '''(?i)key.*=.*(test|example|abc|xyz|123)''',
+            '''AKIA[0-9A-Z]{16}.*test''',
+            '''sk_test_[0-9a-zA-Z]{24}''',
+            '''pk_test_[0-9a-zA-Z]{24}''',
+          ]
+          
+          # Exclude files by extension
+          [allowlist.files]
+          extensions = [
+            "lock",
+            "sum",
+            "mod",
+            "png",
+            "jpg",
+            "jpeg",
+            "gif",
+            "svg",
+            "ico",
+            "woff",
+            "woff2",
+            "ttf",
+            "eot",
+            "otf",
+            "pdf",
+            "zip",
+            "tar",
+            "gz",
+            "bz2",
+            "xz",
+            "7z",
+            "rar",
+            "exe",
+            "dll",
+            "so",
+            "dylib",
+            "class",
+            "jar",
+            "war",
+            "ear",
+          ]
+          EOF
+      
+      - name: Run Gitleaks
+        id: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: true
+          GITLEAKS_NOTIFY_USER_LIST: ${{ github.actor }}
+      
+      - name: Convert to SARIF format
+        if: always()
+        run: |
+          # Install gitleaks if not available
+          if ! command -v gitleaks &> /dev/null; then
+            curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | sh -s -- -b /usr/local/bin
+          fi
+          
+          # Run gitleaks with SARIF output
+          gitleaks detect \
+            --source=/github/workspace \
+            --config=.gitleaks.toml \
+            --report-format=sarif \
+            --report-path=gitleaks-results.sarif \
+            --exit-code=0 \
+            --verbose || true
+          
+          # If SARIF file doesn't exist, create empty one
+          if [ ! -f gitleaks-results.sarif ]; then
+            cat > gitleaks-results.sarif << 'EOL'
+          {
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "Gitleaks",
+                    "version": "latest"
+                  }
+                },
+                "results": []
+              }
+            ]
+          }
+          EOL
+          fi
+      
+      - name: Upload to DefectDojo
+        if: always()
+        run: |
+          if [ -f gitleaks-results.sarif ]; then
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "scan_type=Gitleaks Scan" \
+              -F "file=@gitleaks-results.sarif" \
+              -F "product_name=${{ github.repository }}" \
+              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Gitleaks Secret Scan - ${{ github.sha }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "close_old_findings=true" \
+              -F "push_to_jira=false" \
+              -F "minimum_severity=Info" \
+              -F "scan_date=$(date +%Y-%m-%d)" \
+              -F "tags=gitleaks,secrets,credentials,automated" || echo "Failed to upload to DefectDojo"
+          fi
+      
+      - name: Check for secret findings
+        if: always()
+        run: |
+          if [ -f gitleaks-results.sarif ]; then
+            # Count total secret findings
+            SECRET_COUNT=$(jq '[.runs[].results[]] | length' gitleaks-results.sarif 2>/dev/null || echo "0")
+            
+            echo "Secret findings count: $SECRET_COUNT"
+            
+            if [ "$SECRET_COUNT" -gt 0 ]; then
+              echo "❌ Found $SECRET_COUNT potential secrets!"
+              echo "Please review and remediate the secrets before merging."
+              
+              # Show summary of findings
+              echo "## Secret Findings Summary:"
+              jq -r '.runs[].results[] | "- \(.ruleId): \(.message.text) (File: \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine))"' gitleaks-results.sarif | head -10
+              
+              exit 1
+            else
+              echo "✅ No secrets detected."
+            fi
+          else
+            echo "⚠️ SARIF file not found, but continuing..."
+          fi
+      
+      - name: Generate detailed report
+        if: always()
+        run: |
+          if [ -f gitleaks-results.sarif ]; then
+            echo "## Gitleaks Secret Scan Summary" > gitleaks-summary.md
+            echo "" >> gitleaks-summary.md
+            
+            SECRET_COUNT=$(jq '[.runs[].results[]] | length' gitleaks-results.sarif 2>/dev/null || echo "0")
+            
+            echo "| Finding Type | Count |" >> gitleaks-summary.md
+            echo "|--------------|-------|" >> gitleaks-summary.md
+            echo "| Potential Secrets | $SECRET_COUNT |" >> gitleaks-summary.md
+            echo "" >> gitleaks-summary.md
+            
+            if [ "$SECRET_COUNT" -gt 0 ]; then
+              echo "❌ **Action Required:** Please review and remediate secrets before merging." >> gitleaks-summary.md
+              echo "" >> gitleaks-summary.md
+              echo "### Top Findings:" >> gitleaks-summary.md
+              jq -r '.runs[].results[] | "- **\(.ruleId)**: \(.message.text)"' gitleaks-results.sarif | head -5 >> gitleaks-summary.md
+            else
+              echo "✅ **No secrets detected.**" >> gitleaks-summary.md
+            fi
+          fi
+      
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            if (fs.existsSync('gitleaks-summary.md')) {
+              const summary = fs.readFileSync('gitleaks-summary.md', 'utf8');
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🔍 Gitleaks Secret Scan Results\n\n${summary}\n\nView detailed results in DefectDojo: ${{ secrets.DEFECTDOJO_URL }}`
+              });
+            }
+      
+      - name: Archive scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results
+          path: |
+            gitleaks-results.sarif
+            gitleaks-summary.md
+            .gitleaks.toml
+          retention-days: 30

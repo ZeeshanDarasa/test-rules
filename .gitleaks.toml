@@ -1,0 +1,220 @@
+# Gitleaks configuration file
+title = "Gitleaks Configuration for DevSecOps"
+
+[extend]
+# Use the default gitleaks rules
+useDefault = true
+
+# Global allowlist configuration
+[allowlist]
+description = "Global allowlist for common false positives"
+
+# Exclude common vendor directories and files
+paths = [
+  '''vendor/''',
+  '''vendors/''',
+  '''node_modules/''',
+  '''\.git/''',
+  '''\.github/''',
+  '''dist/''',
+  '''build/''',
+  '''target/''',
+  '''bin/''',
+  '''obj/''',
+  '''\.venv/''',
+  '''venv/''',
+  '''__pycache__/''',
+  '''\.pytest_cache/''',
+  '''coverage/''',
+  '''\.coverage/''',
+  '''\.nyc_output/''',
+  '''logs/''',
+  '''.*\.log$''',
+  '''.*\.tmp$''',
+  '''\.DS_Store''',
+  '''Thumbs\.db''',
+  '''Desktop\.ini''',
+  
+  # Test and example files
+  '''.*test.*''',
+  '''.*spec.*''',
+  '''.*mock.*''',
+  '''.*fixture.*''',
+  '''.*example.*''',
+  '''.*sample.*''',
+  '''.*demo.*''',
+  
+  # Documentation
+  '''README\.md''',
+  '''CHANGELOG\.md''',
+  '''CONTRIBUTING\.md''',
+  '''LICENSE''',
+  '''NOTICE''',
+  '''docs/''',
+  '''documentation/''',
+  
+  # Configuration files
+  '''\.gitignore''',
+  '''\.dockerignore''',
+  '''\.editorconfig''',
+  '''\.eslintrc.*''',
+  '''\.prettierrc.*''',
+  '''tsconfig\.json''',
+  '''package-lock\.json''',
+  '''yarn\.lock''',
+  '''Pipfile\.lock''',
+  '''poetry\.lock''',
+  '''Gemfile\.lock''',
+  '''composer\.lock''',
+  '''go\.sum''',
+  '''Cargo\.lock''',
+  
+  # Generated files
+  '''.*\.min\.js$''',
+  '''.*\.min\.css$''',
+  '''.*\.bundle\.js$''',
+  '''.*\.bundle\.css$''',
+  '''.*\.map$''',
+  '''.*\.d\.ts$''',
+  
+  # Binary and media files
+  '''.*\.png$''',
+  '''.*\.jpg$''',
+  '''.*\.jpeg$''',
+  '''.*\.gif$''',
+  '''.*\.svg$''',
+  '''.*\.ico$''',
+  '''.*\.pdf$''',
+  '''.*\.zip$''',
+  '''.*\.tar$''',
+  '''.*\.gz$''',
+  '''.*\.exe$''',
+  '''.*\.dll$''',
+  '''.*\.so$''',
+  '''.*\.dylib$''',
+  '''.*\.class$''',
+  '''.*\.jar$''',
+  '''.*\.war$''',
+  '''.*\.ear$''',
+]
+
+# Regex patterns to exclude common false positives
+regexes = [
+  # Test/example/dummy values
+  '''(?i)(test|example|sample|mock|fake|dummy|placeholder|demo)''',
+  '''(?i)password.*=.*(test|example|123|password|admin|demo)''',
+  '''(?i)token.*=.*(test|example|abc|xyz|123|demo)''',
+  '''(?i)key.*=.*(test|example|abc|xyz|123|demo)''',
+  '''(?i)secret.*=.*(test|example|abc|xyz|123|demo)''',
+  
+  # Test AWS credentials
+  '''AKIA[0-9A-Z]{16}.*test''',
+  '''AKIA[0-9A-Z]{16}.*example''',
+  '''AKIA[0-9A-Z]{16}.*demo''',
+  
+  # Test Stripe keys
+  '''sk_test_[0-9a-zA-Z]{24}''',
+  '''pk_test_[0-9a-zA-Z]{24}''',
+  '''rk_test_[0-9a-zA-Z]{24}''',
+  
+  # Test GitHub tokens
+  '''ghp_[0-9a-zA-Z]{36}.*test''',
+  '''ghp_[0-9a-zA-Z]{36}.*example''',
+  
+  # Common placeholder values
+  '''(?i)(your|my|the)[-_]?(api[-_]?key|token|secret|password)''',
+  '''(?i)(enter|insert|add|put)[-_]?(your|api)[-_]?(key|token|secret|password)''',
+  '''(?i)<(api[-_]?key|token|secret|password)>''',
+  '''(?i)\[(api[-_]?key|token|secret|password)\]''',
+  '''(?i)\{(api[-_]?key|token|secret|password)\}''',
+  
+  # Environment variable placeholders
+  '''(?i)\$\{?[A-Z_]+[A-Z0-9_]*\}?''',
+  '''(?i)%[A-Z_]+[A-Z0-9_]*%''',
+  
+  # Common development/localhost URLs
+  '''(?i)localhost:\d+''',
+  '''(?i)127\.0\.0\.1:\d+''',
+  '''(?i)0\.0\.0\.0:\d+''',
+  
+  # Documentation examples
+  '''(?i)example\.com''',
+  '''(?i)example\.org''',
+  '''(?i)test\.com''',
+  '''(?i)sample\.com''',
+  '''(?i)foo\.bar''',
+  '''(?i)acme\.com''',
+  
+  # Common hash examples
+  '''(?i)(sha1|sha256|md5|hash).*example''',
+  '''(?i)(sha1|sha256|md5|hash).*test''',
+  '''(?i)(sha1|sha256|md5|hash).*sample''',
+  
+  # JWT examples (starting with eyJ which is base64 for {"alg":)
+  '''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\..*example''',
+  '''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\..*test''',
+  '''eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\..*sample''',
+]
+
+# File extensions to exclude
+[allowlist.files]
+extensions = [
+  "lock",
+  "sum",
+  "mod",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "svg",
+  "ico",
+  "woff",
+  "woff2",
+  "ttf",
+  "eot",
+  "otf",
+  "pdf",
+  "zip",
+  "tar",
+  "gz",
+  "bz2",
+  "xz",
+  "7z",
+  "rar",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "class",
+  "jar",
+  "war",
+  "ear",
+  "min",
+  "map",
+  "log",
+  "tmp",
+  "cache",
+  "pyc",
+  "pyo",
+  "o",
+  "obj",
+  "lib",
+  "a",
+]
+
+# Custom rules can be added here
+[[rules]]
+id = "custom-high-entropy-string"
+description = "High entropy strings that might be secrets"
+regex = '''[A-Za-z0-9+/]{32,}={0,2}'''
+tags = ["secret", "entropy"]
+# Only flag if not in test files or documentation
+[rules.allowlist]
+paths = [
+  '''.*test.*''',
+  '''.*spec.*''',
+  '''.*mock.*''',
+  '''.*example.*''',
+  '''.*\.md$''',
+  '''README.*''',
+]
