@@ -86,6 +86,7 @@ jobs:
             --include="*.c" \
             --include="*.h" \
             --exclude=".git/" \
+            --error --severity=ERROR --quiet \
             --exclude="node_modules/" \
             --exclude="vendor/" \
             . || true
