@@ -6,9 +6,18 @@ on:
   merge_group:
   push:
     branches: [ main, develop ]
-  # Triggered by repository rulesets
   repository_dispatch:
     types: [security-scan, trivy-scan]
+  workflow_dispatch:
+    inputs:
+      blocking:
+        description: 'Block workflow on findings'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+        - 'true'
+        - 'false'
 
 jobs:
   trivy:
@@ -25,56 +34,8 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Create exclusion patterns file
-        run: |
-          cat > .trivyignore << EOF
-          # Vendor and dependency directories
-          vendor/
-          vendors/
-          node_modules/
-          .git/
-          .github/
-          dist/
-          build/
-          target/
-          bin/
-          obj/
-          .venv/
-          venv/
-          __pycache__/
-          .pytest_cache/
-          coverage/
-          .coverage/
-          .nyc_output/
-          logs/
-          *.log
-          *.tmp
-          .DS_Store
-          # Test files
-          **/test/**
-          **/tests/**
-          **/*test*
-          **/*spec*
-          # Documentation only (keep dependency files)
-          docs/
-          documentation/
-          *.md
-          *.pdf
-          EOF
-      
-      - name: Debug directory structure
-        run: |
-          echo "=== Current directory structure ==="
-          find . -type f -name "requirements.txt" -o -name "*.py" | head -20
-          echo ""
-          echo "=== Contents of requirements.txt ==="
-          if [ -f vulncode/requirements.txt ]; then
-            cat vulncode/requirements.txt
-          else
-            echo "requirements.txt not found"
-          fi
-      
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy scan
+        id: scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
@@ -83,136 +44,85 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
-          exit-code: '0'  # Don't fail here, we'll handle it in the next step
+          exit-code: ${{ github.event.inputs.blocking == 'false' && '0' || '1' }}
         env:
           TRIVY_OFFLINE_SCAN: false
           TRIVY_NO_PROGRESS: true
-          TRIVY_CACHE_DIR: /tmp/trivy-cache
           TRIVY_SKIP_VERSION_CHECK: true
       
-      - name: Upload to DefectDojo
+      - name: Display results
         if: always()
         run: |
+          BLOCKING="${{ github.event.inputs.blocking || 'true' }}"
+          echo "Running in $([ "$BLOCKING" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
+          
           if [ -f trivy-results.sarif ]; then
-            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            TOTAL=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            HIGH=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            echo "Trivy scan completed with $TOTAL total findings ($HIGH high/critical)"
+            
+            if [ "$HIGH" -gt 0 ]; then
+              echo "High/Critical vulnerabilities found:"
+              jq -r '.runs[].results[] | select(.level == "error") | "- \(.ruleId // "CVE"): \(.message.text)"' trivy-results.sarif | head -10
+            fi
+          else
+            echo "No SARIF file generated"
+          fi
+      
+      - name: Upload to DefectDojo
+        if: always() && vars.DEFECTDOJO_URL && secrets.DEFECTDOJO_TOKEN
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            curl -X POST "${{ vars.DEFECTDOJO_URL }}/api/v2/import-scan/" \
               -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
               -F "scan_type=Trivy Scan" \
               -F "file=@trivy-results.sarif" \
               -F "product_name=${{ github.repository }}" \
-              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
-              -F "test_title=Trivy Vulnerability Scan - ${{ github.sha }}" \
+              -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Trivy Vulnerability - ${{ github.sha }}" \
               -F "active=true" \
               -F "verified=false" \
-              -F "close_old_findings=true" \
-              -F "push_to_jira=false" \
-              -F "minimum_severity=Info" \
               -F "scan_date=$(date +%Y-%m-%d)" \
-              -F "tags=trivy,vulnerability,dependency,automated" || echo "Failed to upload to DefectDojo"
+              -F "tags=trivy,vulnerability,dependency" || echo "DefectDojo upload failed"
           fi
       
-      - name: Check for high/critical vulnerabilities
+      - name: Upload SARIF artifact
         if: always()
-        run: |
-          if [ -f trivy-results.sarif ]; then
-            # Count all severity findings using different approaches
-            echo "=== DEBUG: SARIF content sample ==="
-            jq '.runs[].results[0:3]' trivy-results.sarif || echo "No results in SARIF"
-            
-            # Try multiple ways to count high/critical findings
-            HIGH_COUNT=$(jq '[.runs[].results[] | select(.properties.severity == "HIGH")] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.properties.severity == "CRITICAL")] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            
-            # Alternative counting method
-            HIGH_COUNT2=$(jq '[.runs[].results[] | select(.ruleId | contains("HIGH"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            CRITICAL_COUNT2=$(jq '[.runs[].results[] | select(.ruleId | contains("CRITICAL"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            
-            # Count any error-level findings
-            ERROR_COUNT=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            
-            # Total findings
-            TOTAL_COUNT=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            
-            echo "High severity (method 1): $HIGH_COUNT"
-            echo "Critical severity (method 1): $CRITICAL_COUNT"
-            echo "High severity (method 2): $HIGH_COUNT2"
-            echo "Critical severity (method 2): $CRITICAL_COUNT2"
-            echo "Error level findings: $ERROR_COUNT"
-            echo "Total findings: $TOTAL_COUNT"
-            
-            TOTAL_HIGH_CRITICAL=$((HIGH_COUNT + CRITICAL_COUNT + HIGH_COUNT2 + CRITICAL_COUNT2))
-            
-            # If we have any findings and they're likely high/critical, fail
-            if [ "$TOTAL_COUNT" -gt 0 ] && [ "$ERROR_COUNT" -gt 0 ]; then
-              echo "❌ Found $TOTAL_COUNT vulnerabilities with $ERROR_COUNT error-level findings!"
-              echo "Please review and fix the vulnerabilities before merging."
-              
-              # Show summary of findings
-              echo "## Vulnerability Summary:"
-              jq -r '.runs[].results[] | "- \(.ruleId // "Unknown"): \(.message.text)"' trivy-results.sarif | head -20
-              
-              exit 1
-            elif [ "$TOTAL_HIGH_CRITICAL" -gt 0 ]; then
-              echo "❌ Found $TOTAL_HIGH_CRITICAL high/critical vulnerabilities!"
-              echo "Please review and fix the vulnerabilities before merging."
-              exit 1
-            else
-              echo "✅ No high/critical vulnerabilities detected."
-            fi
-          else
-            echo "⚠️ SARIF file not found, but continuing..."
-          fi
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif
+          path: trivy-results.sarif
+          retention-days: 30
       
-      - name: Generate detailed report
-        if: always()
-        run: |
-          if [ -f trivy-results.sarif ]; then
-            echo "## Trivy Vulnerability Scan Summary" > trivy-summary.md
-            echo "" >> trivy-summary.md
-            
-            TOTAL_VULNS=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            HIGH_VULNS=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties."security-severity" == "8.0" or .properties."security-severity" == "9.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            CRITICAL_VULNS=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "CRITICAL" or .properties."security-severity" == "10.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            MEDIUM_VULNS=$(jq '[.runs[].results[] | select(.properties.severity == "MEDIUM" or .properties."security-severity" == "5.0")] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            LOW_VULNS=$(jq '[.runs[].results[] | select(.properties.severity == "LOW" or .properties."security-severity" <= "3.0")] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            
-            echo "| Severity | Count |" >> trivy-summary.md
-            echo "|----------|-------|" >> trivy-summary.md
-            echo "| Critical | $CRITICAL_VULNS |" >> trivy-summary.md
-            echo "| High | $HIGH_VULNS |" >> trivy-summary.md
-            echo "| Medium | $MEDIUM_VULNS |" >> trivy-summary.md
-            echo "| Low | $LOW_VULNS |" >> trivy-summary.md
-            echo "| **Total** | **$TOTAL_VULNS** |" >> trivy-summary.md
-            echo "" >> trivy-summary.md
-            
-            if [ "$((CRITICAL_VULNS + HIGH_VULNS))" -gt 0 ]; then
-              echo "❌ **Action Required:** Please address high/critical vulnerabilities before merging." >> trivy-summary.md
-            else
-              echo "✅ **No high/critical vulnerabilities found.**" >> trivy-summary.md
-            fi
-          fi
-      
-      - name: Comment PR with results
+      - name: Comment on PR
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             
-            if (fs.existsSync('trivy-summary.md')) {
-              const summary = fs.readFileSync('trivy-summary.md', 'utf8');
+            if (fs.existsSync('trivy-results.sarif')) {
+              const sarif = JSON.parse(fs.readFileSync('trivy-results.sarif', 'utf8'));
+              const results = sarif.runs?.[0]?.results || [];
+              const highCritical = results.filter(r => r.level === 'error').length;
+              const blocking = '${{ github.event.inputs.blocking || 'true' }}' === 'true';
+              
+              const body = `## 🔍 Trivy Vulnerability Scan Results
+              
+              **Mode**: ${blocking ? '🚫 Blocking' : '⚠️ Non-blocking'}
+              **Total findings**: ${results.length}
+              **High/Critical**: ${highCritical}
+              
+              ${highCritical > 0 ? 
+                `⚠️ High/Critical vulnerabilities detected. ${blocking ? 'Workflow will fail.' : 'Review recommended.'}` : 
+                '✅ No high/critical vulnerabilities found.'
+              }`;
               
               github.rest.issues.createComment({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `## 🔍 Trivy Vulnerability Scan Results\n\n${summary}\n\nView detailed results in DefectDojo: ${{ secrets.DEFECTDOJO_URL }}`
+                body: body
               });
             }
-      
-      - name: Cache Trivy DB
-        uses: actions/cache@v3
-        with:
-          path: /tmp/trivy-cache
-          key: ${{ runner.os }}-trivy-db-${{ github.run_id }}
-          restore-keys: |
-            ${{ runner.os }}-trivy-db-

@@ -6,13 +6,22 @@ on:
   merge_group:
   push:
     branches: [ main, develop ]
-  # Triggered by repository rulesets
   repository_dispatch:
     types: [security-scan, semgrep-scan]
+  workflow_dispatch:
+    inputs:
+      blocking:
+        description: 'Block workflow on findings'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+        - 'true'
+        - 'false'
 
 jobs:
   semgrep:
-    name: Semgrep Scan
+    name: Semgrep SAST Scan
     runs-on: ubuntu-latest
     
     permissions:
@@ -25,110 +34,75 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Check for scannable code
-        id: check-code
+      - name: Install Semgrep
+        run: pip install semgrep
+      
+      - name: Run Semgrep scan
+        id: scan
         run: |
-          # Check if there are any source code files to scan (including subdirectories)
-          SOURCE_FILES=$(find . -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.java" -o -name "*.go" -o -name "*.rs" -o -name "*.rb" -o -name "*.php" -o -name "*.cs" -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" -o -name "*.swift" -o -name "*.kt" -o -name "*.scala" -o -name "*.clj" -o -name "*.hs" -o -name "*.ml" -o -name "*.fs" -o -name "*.vb" -o -name "*.sh" -o -name "*.ps1" -o -name "*.bat" -o -name "*.sql" -o -name "*.html" -o -name "*.css" -o -name "*.xml" -o -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.toml" -o -name "*.ini" -o -name "*.cfg" -o -name "*.conf" -o -name "requirements.txt" -o -name "package.json" -o -name "Pipfile" -o -name "Cargo.toml" -o -name "go.mod" -o -name "Gemfile" -o -name "composer.json" \) -not -path "./.git/*" -not -path "./.github/*" -not -path "./node_modules/*" -not -path "./vendor/*" -not -path "./dist/*" -not -path "./build/*" -not -path "./target/*" 2>/dev/null)
+          BLOCKING="${{ github.event.inputs.blocking || 'true' }}"
           
-          if [ -z "$SOURCE_FILES" ]; then
-            echo "No source code files found to scan"
-            echo "has_code=false" >> $GITHUB_OUTPUT
+          if [ "$BLOCKING" = "true" ]; then
+            echo "Running in BLOCKING mode - will fail on findings"
+            semgrep \
+              --config=auto \
+              --sarif \
+              --output=semgrep.sarif \
+              --no-git-ignore \
+              --error \
+              --severity=ERROR \
+              .
           else
-            echo "Found $(echo "$SOURCE_FILES" | wc -l) source code files to scan"
-            echo "has_code=true" >> $GITHUB_OUTPUT
+            echo "Running in NON-BLOCKING mode - will not fail on findings"
+            semgrep \
+              --config=auto \
+              --sarif \
+              --output=semgrep.sarif \
+              --no-git-ignore \
+              . || true
           fi
       
-      - name: Run Semgrep
-        if: steps.check-code.outputs.has_code == 'true'
-        id: semgrep
-        run: |
-          # Install semgrep
-          pip install semgrep
-          
-          # Run semgrep scan - will fail if vulnerabilities are found
-          semgrep \
-            --config=auto \
-            --sarif \
-            --output=semgrep.sarif \
-            --no-git-ignore \
-            --error \
-            --severity=ERROR \
-            --include="*.py" \
-            --include="*.js" \
-            --include="*.ts" \
-            --include="*.java" \
-            --include="*.go" \
-            --include="*.rb" \
-            --include="*.php" \
-            --include="*.cs" \
-            --include="*.cpp" \
-            --include="*.c" \
-            --include="*.h" \
-            --exclude=".git/" \
-            --exclude="node_modules/" \
-            --exclude="vendor/" \
-            .
-      
-      - name: Create empty SARIF if no code to scan
-        if: steps.check-code.outputs.has_code == 'false'
-        run: |
-          cat > semgrep.sarif << 'EOF'
-          {
-            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-            "version": "2.1.0",
-            "runs": [
-              {
-                "tool": {
-                  "driver": {
-                    "name": "Semgrep",
-                    "version": "latest"
-                  }
-                },
-                "results": [],
-                "invocations": [
-                  {
-                    "executionSuccessful": true,
-                    "commandLine": "semgrep scan --no-code-found",
-                    "endTimeUtc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-      
-      - name: Upload to DefectDojo
+      - name: Display results
         if: always()
         run: |
           if [ -f semgrep.sarif ]; then
-            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            FINDINGS=$(jq '[.runs[].results[]] | length' semgrep.sarif 2>/dev/null || echo "0")
+            echo "Semgrep scan completed with $FINDINGS findings"
+            
+            if [ "$FINDINGS" -gt 0 ]; then
+              echo "Found vulnerabilities:"
+              jq -r '.runs[].results[] | "- \(.ruleId): \(.message.text)"' semgrep.sarif | head -10
+            fi
+          else
+            echo "No SARIF file generated"
+          fi
+      
+      - name: Upload to DefectDojo
+        if: always() && vars.DEFECTDOJO_URL && secrets.DEFECTDOJO_TOKEN
+        run: |
+          if [ -f semgrep.sarif ]; then
+            curl -X POST "${{ vars.DEFECTDOJO_URL }}/api/v2/import-scan/" \
               -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
               -F "scan_type=Semgrep JSON Report" \
               -F "file=@semgrep.sarif" \
               -F "product_name=${{ github.repository }}" \
-              -F "engagement_name=Automated Security Scan - $(date +%Y-%m-%d)" \
-              -F "test_title=Semgrep SAST Scan - ${{ github.sha }}" \
+              -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+              -F "test_title=Semgrep SAST - ${{ github.sha }}" \
               -F "active=true" \
               -F "verified=false" \
-              -F "close_old_findings=true" \
-              -F "push_to_jira=false" \
-              -F "minimum_severity=Info" \
               -F "scan_date=$(date +%Y-%m-%d)" \
-              -F "tags=semgrep,sast,automated" || echo "Failed to upload to DefectDojo"
+              -F "tags=semgrep,sast,automated" || echo "DefectDojo upload failed"
           fi
       
-      - name: Display scan results
+      - name: Upload SARIF artifact
         if: always()
-        run: |
-          if [ -f semgrep.sarif ]; then
-            FINDINGS_COUNT=$(jq '[.runs[].results[]] | length' semgrep.sarif 2>/dev/null || echo "0")
-            echo "Semgrep scan completed with $FINDINGS_COUNT findings"
-          else
-            echo "No SARIF file generated - scan may have failed or found no code"
-          fi
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          retention-days: 30
       
-      - name: Comment PR with results
+      - name: Comment on PR
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
@@ -138,22 +112,17 @@ jobs:
             if (fs.existsSync('semgrep.sarif')) {
               const sarif = JSON.parse(fs.readFileSync('semgrep.sarif', 'utf8'));
               const results = sarif.runs?.[0]?.results || [];
-              const highCritical = results.filter(r => 
-                r.level === 'error' || 
-                (r.ruleId && r.ruleId.match(/\.(high|critical)$/))
-              );
+              const blocking = '${{ github.event.inputs.blocking || 'true' }}' === 'true';
               
               const body = `## 🔍 Semgrep Security Scan Results
               
-              **Total findings:** ${results.length}
-              **High/Critical findings:** ${highCritical.length}
+              **Mode**: ${blocking ? '🚫 Blocking' : '⚠️ Non-blocking'}
+              **Findings**: ${results.length}
               
-              ${highCritical.length > 0 ? 
-                '❌ **Action Required:** Please address high/critical security findings before merging.' : 
-                '✅ **No high/critical security issues found.**'
-              }
-              
-              View detailed results in DefectDojo: ${{ secrets.DEFECTDOJO_URL }}`;
+              ${results.length > 0 ? 
+                `⚠️ Security issues detected. ${blocking ? 'Workflow will fail.' : 'Review recommended.'}` : 
+                '✅ No security issues found.'
+              }`;
               
               github.rest.issues.createComment({
                 issue_number: context.issue.number,
