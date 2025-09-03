@@ -37,11 +37,11 @@ jobs:
       matrix:
         scanner: 
           - name: semgrep
-            enabled: ${{ github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'semgrep' || github.event.inputs.scan_type == '' }}
+            enabled: true
           - name: trivy
-            enabled: ${{ github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'trivy' || github.event.inputs.scan_type == '' }}
+            enabled: true
           - name: gitleaks
-            enabled: ${{ github.event.inputs.scan_type == 'all' || github.event.inputs.scan_type == 'gitleaks' || github.event.inputs.scan_type == '' }}
+            enabled: true
     
     steps:
       - name: Checkout code
@@ -182,7 +182,7 @@ jobs:
       
       - name: Run Trivy vulnerability scanner
         if: matrix.scanner.name == 'trivy' && matrix.scanner.enabled
-        uses: aquasecurity/trivy-action@v0.18.3
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'

@@ -63,7 +63,7 @@ jobs:
           EOF
       
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.18.3
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
