@@ -1,9 +1,10 @@
 name: Security Scan Suite
 
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
+  pull_request_target:
+  merge_group:
+  push:
     branches: [ main, develop ]
   # Triggered by repository rulesets
   repository_dispatch:
@@ -132,7 +133,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
-          scan-ref: '/github/workspace'
+          scan-ref: '.'
           scanners: 'vuln,secret,config'
           format: 'sarif'
           output: 'trivy-results.sarif'
@@ -141,6 +142,7 @@ jobs:
         env:
           TRIVY_OFFLINE_SCAN: false
           TRIVY_NO_PROGRESS: true
+          TRIVY_SKIP_VERSION_CHECK: true
       
       # Gitleaks Scan
       - name: Create Gitleaks configuration
@@ -209,7 +211,7 @@ jobs:
           
           # Run gitleaks with SARIF output
           gitleaks detect \
-            --source=/github/workspace \
+            --source=. \
             --config=.gitleaks.toml \
             --report-format=sarif \
             --report-path=gitleaks-results.sarif \

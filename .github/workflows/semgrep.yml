@@ -1,9 +1,10 @@
 name: Semgrep Security Scan
 
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
+  pull_request_target:
+  merge_group:
+  push:
     branches: [ main, develop ]
   # Triggered by repository rulesets
   repository_dispatch:
