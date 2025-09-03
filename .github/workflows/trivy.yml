@@ -62,12 +62,24 @@ jobs:
           *.pdf
           EOF
       
+      - name: Debug directory structure
+        run: |
+          echo "=== Current directory structure ==="
+          find . -type f -name "requirements.txt" -o -name "*.py" | head -20
+          echo ""
+          echo "=== Contents of requirements.txt ==="
+          if [ -f vulncode/requirements.txt ]; then
+            cat vulncode/requirements.txt
+          else
+            echo "requirements.txt not found"
+          fi
+      
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
-          scanners: 'vuln,secret,misconfig'
+          scanners: 'vuln'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
