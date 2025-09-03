@@ -85,17 +85,14 @@ jobs:
           docs/
           documentation/
           *.md
-          # Lock and binary files
-          *.lock
-          *.sum
-          *.mod
+          *.pdf
+          # Binary and media files only
           *.png
           *.jpg
           *.jpeg
           *.gif
           *.svg
           *.ico
-          *.pdf
           *.zip
           *.tar
           *.gz
@@ -110,8 +107,8 @@ jobs:
         if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled
         id: semgrep-check
         run: |
-          # Check if there are any source code files to scan
-          SOURCE_FILES=$(find . -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.java" -o -name "*.go" -o -name "*.rs" -o -name "*.rb" -o -name "*.php" -o -name "*.cs" -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" -o -name "*.swift" -o -name "*.kt" -o -name "*.scala" -o -name "*.clj" -o -name "*.hs" -o -name "*.ml" -o -name "*.fs" -o -name "*.vb" -o -name "*.sh" -o -name "*.ps1" -o -name "*.bat" -o -name "*.sql" -o -name "*.html" -o -name "*.css" -o -name "*.xml" -o -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.toml" -o -name "*.ini" -o -name "*.cfg" -o -name "*.conf" \) -not -path "./.git/*" -not -path "./.github/*" -not -path "./node_modules/*" -not -path "./vendor/*" -not -path "./dist/*" -not -path "./build/*" -not -path "./target/*" 2>/dev/null | head -10)
+          # Check if there are any source code files to scan (including subdirectories)
+          SOURCE_FILES=$(find . -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.java" -o -name "*.go" -o -name "*.rs" -o -name "*.rb" -o -name "*.php" -o -name "*.cs" -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" -o -name "*.swift" -o -name "*.kt" -o -name "*.scala" -o -name "*.clj" -o -name "*.hs" -o -name "*.ml" -o -name "*.fs" -o -name "*.vb" -o -name "*.sh" -o -name "*.ps1" -o -name "*.bat" -o -name "*.sql" -o -name "*.html" -o -name "*.css" -o -name "*.xml" -o -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.toml" -o -name "*.ini" -o -name "*.cfg" -o -name "*.conf" -o -name "requirements.txt" -o -name "package.json" -o -name "Pipfile" -o -name "Cargo.toml" -o -name "go.mod" -o -name "Gemfile" -o -name "composer.json" \) -not -path "./.git/*" -not -path "./.github/*" -not -path "./node_modules/*" -not -path "./vendor/*" -not -path "./dist/*" -not -path "./build/*" -not -path "./target/*" 2>/dev/null | head -20)
           
           if [ -z "$SOURCE_FILES" ]; then
             echo "No source code files found to scan"
@@ -177,7 +174,7 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: '.'
-          scanners: 'vuln,secret,config'
+          scanners: 'vuln,secret,misconfig'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
