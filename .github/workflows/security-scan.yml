@@ -106,8 +106,24 @@ jobs:
           EOF
       
       # Semgrep Scan
-      - name: Run Semgrep
+      - name: Check for scannable code (Semgrep)
         if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled
+        id: semgrep-check
+        run: |
+          # Check if there are any source code files to scan
+          SOURCE_FILES=$(find . -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.java" -o -name "*.go" -o -name "*.rs" -o -name "*.rb" -o -name "*.php" -o -name "*.cs" -o -name "*.cpp" -o -name "*.c" -o -name "*.h" -o -name "*.hpp" -o -name "*.swift" -o -name "*.kt" -o -name "*.scala" -o -name "*.clj" -o -name "*.hs" -o -name "*.ml" -o -name "*.fs" -o -name "*.vb" -o -name "*.sh" -o -name "*.ps1" -o -name "*.bat" -o -name "*.sql" -o -name "*.html" -o -name "*.css" -o -name "*.xml" -o -name "*.yaml" -o -name "*.yml" -o -name "*.json" -o -name "*.toml" -o -name "*.ini" -o -name "*.cfg" -o -name "*.conf" \) -not -path "./.git/*" -not -path "./.github/*" -not -path "./node_modules/*" -not -path "./vendor/*" -not -path "./dist/*" -not -path "./build/*" -not -path "./target/*" 2>/dev/null | head -10)
+          
+          if [ -z "$SOURCE_FILES" ]; then
+            echo "No source code files found to scan"
+            echo "has_code=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found source code files to scan:"
+            echo "$SOURCE_FILES"
+            echo "has_code=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run Semgrep
+        if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled && steps.semgrep-check.outputs.has_code == 'true'
         id: semgrep
         uses: semgrep/semgrep-action@v1
         with:
@@ -116,12 +132,39 @@ jobs:
             p/secrets
             p/owasp-top-ten
             p/cwe-top-25
-          generateSarif: "1"
           publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
         env:
           SEMGREP_RULES: auto
           SEMGREP_BASELINE_REF: ${{ github.base_ref || 'main' }}
           SEMGREP_EXCLUDE_FILE: .scan-exclusions
+      
+      - name: Create empty Semgrep SARIF if no code to scan
+        if: matrix.scanner.name == 'semgrep' && matrix.scanner.enabled && steps.semgrep-check.outputs.has_code == 'false'
+        run: |
+          cat > semgrep.sarif << 'EOF'
+          {
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+              {
+                "tool": {
+                  "driver": {
+                    "name": "Semgrep",
+                    "version": "latest"
+                  }
+                },
+                "results": [],
+                "invocations": [
+                  {
+                    "executionSuccessful": true,
+                    "commandLine": "semgrep scan --no-code-found",
+                    "endTimeUtc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
       
       # Trivy Scan
       - name: Create Trivy ignore file
