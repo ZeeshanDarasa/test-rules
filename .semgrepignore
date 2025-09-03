@@ -38,7 +38,7 @@ README*
 CHANGELOG*
 LICENSE*
 
-# Configuration files
+# Configuration files (keep source code files)
 .gitignore
 .dockerignore
 .editorconfig
@@ -53,6 +53,50 @@ Gemfile.lock
 composer.lock
 go.sum
 Cargo.lock
+
+# Keep these source code files (don't exclude them)
+!*.py
+!*.js
+!*.ts
+!*.java
+!*.go
+!*.rs
+!*.rb
+!*.php
+!*.cs
+!*.cpp
+!*.c
+!*.h
+!*.hpp
+!*.swift
+!*.kt
+!*.scala
+!*.clj
+!*.hs
+!*.ml
+!*.fs
+!*.vb
+!*.sh
+!*.ps1
+!*.bat
+!*.sql
+!*.html
+!*.css
+!*.xml
+!*.yaml
+!*.yml
+!*.json
+!*.toml
+!*.ini
+!*.cfg
+!*.conf
+!requirements.txt
+!package.json
+!Pipfile
+!Cargo.toml
+!go.mod
+!Gemfile
+!composer.json
 
 # Generated and compiled files
 *.min.js
