@@ -133,7 +133,7 @@ jobs:
       
       # Upload to DefectDojo
       - name: Upload to DefectDojo
-        if: always() && vars.DEFECTDOJO_URL && secrets.DEFECTDOJO_TOKEN
+        if: always()
         run: |
           SCANNER="${{ matrix.scanner.name }}"
           
@@ -159,7 +159,7 @@ jobs:
           esac
           
           if [ -f "$FILE" ]; then
-            curl -X POST "${{ vars.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
               -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
               -F "scan_type=$SCAN_TYPE" \
               -F "file=@$FILE" \

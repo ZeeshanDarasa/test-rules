@@ -103,10 +103,10 @@ jobs:
           fi
       
       - name: Upload to DefectDojo
-        if: always() && vars.DEFECTDOJO_URL && secrets.DEFECTDOJO_TOKEN
+        if: always()
         run: |
           if [ -f gitleaks-results.sarif ]; then
-            curl -X POST "${{ vars.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
               -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
               -F "scan_type=Gitleaks Scan" \
               -F "file=@gitleaks-results.sarif" \
