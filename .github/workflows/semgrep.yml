@@ -28,8 +28,7 @@ jobs:
       - name: Check for scannable code
         id: check-code
         run: |
-
-        echo "=== DEBUG: Current directory structure ==="
+          echo "=== DEBUG: Current directory structure ==="
           find . -type f -name "*.py" -o -name "*.txt" -o -name "*.ini" | head -20
           echo ""
           
