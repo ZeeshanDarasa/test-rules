@@ -102,24 +102,46 @@ jobs:
         if: always()
         run: |
           if [ -f trivy-results.sarif ]; then
-            # Count high and critical severity findings
-            HIGH_COUNT=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties."security-severity" == "8.0" or .properties."security-severity" == "9.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
-            CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error" and (.properties.severity == "CRITICAL" or .properties."security-severity" == "10.0"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            # Count all severity findings using different approaches
+            echo "=== DEBUG: SARIF content sample ==="
+            jq '.runs[].results[0:3]' trivy-results.sarif || echo "No results in SARIF"
             
-            TOTAL_HIGH_CRITICAL=$((HIGH_COUNT + CRITICAL_COUNT))
+            # Try multiple ways to count high/critical findings
+            HIGH_COUNT=$(jq '[.runs[].results[] | select(.properties.severity == "HIGH")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.properties.severity == "CRITICAL")] | length' trivy-results.sarif 2>/dev/null || echo "0")
             
-            echo "High severity findings: $HIGH_COUNT"
-            echo "Critical severity findings: $CRITICAL_COUNT"
-            echo "Total high/critical findings: $TOTAL_HIGH_CRITICAL"
+            # Alternative counting method
+            HIGH_COUNT2=$(jq '[.runs[].results[] | select(.ruleId | contains("HIGH"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            CRITICAL_COUNT2=$(jq '[.runs[].results[] | select(.ruleId | contains("CRITICAL"))] | length' trivy-results.sarif 2>/dev/null || echo "0")
             
-            if [ "$TOTAL_HIGH_CRITICAL" -gt 0 ]; then
-              echo "❌ Found $TOTAL_HIGH_CRITICAL high/critical vulnerabilities!"
+            # Count any error-level findings
+            ERROR_COUNT=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            # Total findings
+            TOTAL_COUNT=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+            
+            echo "High severity (method 1): $HIGH_COUNT"
+            echo "Critical severity (method 1): $CRITICAL_COUNT"
+            echo "High severity (method 2): $HIGH_COUNT2"
+            echo "Critical severity (method 2): $CRITICAL_COUNT2"
+            echo "Error level findings: $ERROR_COUNT"
+            echo "Total findings: $TOTAL_COUNT"
+            
+            TOTAL_HIGH_CRITICAL=$((HIGH_COUNT + CRITICAL_COUNT + HIGH_COUNT2 + CRITICAL_COUNT2))
+            
+            # If we have any findings and they're likely high/critical, fail
+            if [ "$TOTAL_COUNT" -gt 0 ] && [ "$ERROR_COUNT" -gt 0 ]; then
+              echo "❌ Found $TOTAL_COUNT vulnerabilities with $ERROR_COUNT error-level findings!"
               echo "Please review and fix the vulnerabilities before merging."
               
               # Show summary of findings
               echo "## Vulnerability Summary:"
-              jq -r '.runs[].results[] | select(.level == "error" and (.properties.severity == "HIGH" or .properties.severity == "CRITICAL" or .properties."security-severity" >= "8.0")) | "- \(.ruleId): \(.message.text)"' trivy-results.sarif | head -20
+              jq -r '.runs[].results[] | "- \(.ruleId // "Unknown"): \(.message.text)"' trivy-results.sarif | head -20
               
+              exit 1
+            elif [ "$TOTAL_HIGH_CRITICAL" -gt 0 ]; then
+              echo "❌ Found $TOTAL_HIGH_CRITICAL high/critical vulnerabilities!"
+              echo "Please review and fix the vulnerabilities before merging."
               exit 1
             else
               echo "✅ No high/critical vulnerabilities detected."

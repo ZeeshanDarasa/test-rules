@@ -35,13 +35,13 @@ paths = [
   '''Thumbs\.db''',
   '''Desktop\.ini''',
   
-  # Test and example files
-  '''.*test.*''',
-  '''.*spec.*''',
-  '''.*mock.*''',
-  '''.*fixture.*''',
-  '''.*example.*''',
-  '''.*sample.*''',
+  # Test and example files - DISABLED FOR TESTING
+  # '''.*test.*''',
+  # '''.*spec.*''',
+  # '''.*mock.*''',
+  # '''.*fixture.*''',
+  # '''.*example.*''',
+  # '''.*sample.*''',
   '''.*demo.*''',
   
   # Documentation
@@ -98,14 +98,14 @@ paths = [
   '''.*\.ear$''',
 ]
 
-# Regex patterns to exclude common false positives
+# Regex patterns to exclude common false positives (commented out for testing)
 regexes = [
-  # Test/example/dummy values
-  '''(?i)(test|example|sample|mock|fake|dummy|placeholder|demo)''',
-  '''(?i)password.*=.*(test|example|123|password|admin|demo)''',
-  '''(?i)token.*=.*(test|example|abc|xyz|123|demo)''',
-  '''(?i)key.*=.*(test|example|abc|xyz|123|demo)''',
-  '''(?i)secret.*=.*(test|example|abc|xyz|123|demo)''',
+  # Test/example/dummy values - DISABLED FOR TESTING
+  # '''(?i)(test|example|sample|mock|fake|dummy|placeholder|demo)''',
+  # '''(?i)password.*=.*(test|example|123|password|admin|demo)''',
+  # '''(?i)token.*=.*(test|example|abc|xyz|123|demo)''',
+  # '''(?i)key.*=.*(test|example|abc|xyz|123|demo)''',
+  # '''(?i)secret.*=.*(test|example|abc|xyz|123|demo)''',
   
   # Test AWS credentials
   '''AKIA[0-9A-Z]{16}.*test''',

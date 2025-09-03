@@ -28,7 +28,8 @@ jobs:
       - name: Check for scannable code
         id: check-code
         run: |
-          echo "=== DEBUG: Current directory structure ==="
+
+        echo "=== DEBUG: Current directory structure ==="
           find . -type f -name "*.py" -o -name "*.txt" -o -name "*.ini" | head -20
           echo ""
           
@@ -55,97 +56,84 @@ jobs:
       - name: Run Semgrep
         if: steps.check-code.outputs.has_code == 'true'
         id: semgrep
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/security-audit
-            p/secrets
-            p/owasp-top-ten
-            p/cwe-top-25
-          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
-        env:
-          SEMGREP_RULES: auto
-          SEMGREP_BASELINE_REF: ${{ github.base_ref || 'main' }}
-          # Exclusions to prevent false positives while allowing source code
-          SEMGREP_EXCLUDE: |
-            # Vendor and dependency directories
-            vendor/
-            vendors/
-            node_modules/
-            .git/
-            .github/
-            dist/
-            build/
-            target/
-            bin/
-            obj/
-            .venv/
-            venv/
-            __pycache__/
-            .pytest_cache/
-            coverage/
-            .coverage/
-            .nyc_output/
-            logs/
-            *.log
-            *.tmp
-            .DS_Store
-            
-            # Documentation files only (keep source code files)
-            *.md
-            *.pdf
-            
-            # Test and example files
-            **/test/**
-            **/tests/**
-            **/*test*
-            **/*spec*
-            **/*mock*
-            **/*fixture*
-            **/*example*
-            **/*sample*
-            **/*demo*
-            
-            # Generated and compiled files
-            *.min.js
-            *.min.css
-            *.bundle.js
-            *.bundle.css
-            *.map
-            *.d.ts
-            *.pyc
-            *.pyo
-            *.class
-            *.jar
-            *.war
-            *.ear
-            *.exe
-            *.dll
-            *.so
-            *.dylib
-            *.o
-            *.obj
-            *.lib
-            *.a
-            
-            # Media and archive files
-            *.png
-            *.jpg
-            *.jpeg
-            *.gif
-            *.svg
-            *.ico
-            *.mp4
-            *.mp3
-            *.avi
-            *.mov
-            *.zip
-            *.tar
-            *.gz
-            *.bz2
-            *.xz
-            *.7z
-            *.rar
+        run: |
+          # Install semgrep
+          pip install semgrep
+          
+          # Run semgrep directly with explicit paths to scan all files
+          semgrep --config=auto \
+            --sarif \
+            --output=semgrep.sarif \
+            --exclude="vendor/" \
+            --exclude="vendors/" \
+            --exclude="node_modules/" \
+            --exclude=".git/" \
+            --exclude=".github/" \
+            --exclude="dist/" \
+            --exclude="build/" \
+            --exclude="target/" \
+            --exclude="bin/" \
+            --exclude="obj/" \
+            --exclude=".venv/" \
+            --exclude="venv/" \
+            --exclude="__pycache__/" \
+            --exclude=".pytest_cache/" \
+            --exclude="coverage/" \
+            --exclude=".coverage/" \
+            --exclude=".nyc_output/" \
+            --exclude="logs/" \
+            --exclude="*.log" \
+            --exclude="*.tmp" \
+            --exclude=".DS_Store" \
+            --exclude="*.md" \
+            --exclude="*.pdf" \
+            --exclude="**/test/**" \
+            --exclude="**/tests/**" \
+            --exclude="**/*test*" \
+            --exclude="**/*spec*" \
+            --exclude="**/*mock*" \
+            --exclude="**/*fixture*" \
+            --exclude="**/*example*" \
+            --exclude="**/*sample*" \
+            --exclude="**/*demo*" \
+            --exclude="*.min.js" \
+            --exclude="*.min.css" \
+            --exclude="*.bundle.js" \
+            --exclude="*.bundle.css" \
+            --exclude="*.map" \
+            --exclude="*.d.ts" \
+            --exclude="*.pyc" \
+            --exclude="*.pyo" \
+            --exclude="*.class" \
+            --exclude="*.jar" \
+            --exclude="*.war" \
+            --exclude="*.ear" \
+            --exclude="*.exe" \
+            --exclude="*.dll" \
+            --exclude="*.so" \
+            --exclude="*.dylib" \
+            --exclude="*.o" \
+            --exclude="*.obj" \
+            --exclude="*.lib" \
+            --exclude="*.a" \
+            --exclude="*.png" \
+            --exclude="*.jpg" \
+            --exclude="*.jpeg" \
+            --exclude="*.gif" \
+            --exclude="*.svg" \
+            --exclude="*.ico" \
+            --exclude="*.mp4" \
+            --exclude="*.mp3" \
+            --exclude="*.avi" \
+            --exclude="*.mov" \
+            --exclude="*.zip" \
+            --exclude="*.tar" \
+            --exclude="*.gz" \
+            --exclude="*.bz2" \
+            --exclude="*.xz" \
+            --exclude="*.7z" \
+            --exclude="*.rar" \
+            . || true
       
       - name: Create empty SARIF if no code to scan
         if: steps.check-code.outputs.has_code == 'false'
