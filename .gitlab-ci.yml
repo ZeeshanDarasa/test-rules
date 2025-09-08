@@ -1,0 +1,32 @@
+# GitLab CI Pipeline for Security Scanning Only
+# Configured for local GitLab CE instance
+
+# Include the security scanning pipeline
+include:
+  - local: '.gitlab/security-scan.yml'
+
+# Global variables - customize for your GitLab CE instance
+variables:
+  # Security scan configuration
+  BLOCKING_MODE: "true"        # Set to "false" for non-blocking scans
+  SCAN_SEMGREP: "true"         # Enable Semgrep SAST scanning
+  SCAN_TRIVY: "true"           # Enable Trivy vulnerability scanning
+  SCAN_GITLEAKS: "true"        # Enable Gitleaks secret scanning
+  
+  # DefectDojo integration (configure these in GitLab CI/CD variables)
+  # DEFECTDOJO_URL: "https://your-defectdojo-instance.com"
+  # DEFECTDOJO_TOKEN: "your-api-token"
+
+# Single stage - security only
+stages:
+  - security
+
+# Pipeline rules - when to run
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "develop" 
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+    - if: $CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop")

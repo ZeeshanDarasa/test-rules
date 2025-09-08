@@ -1,0 +1,215 @@
+# GitLab CI Pipeline for Combined Security Scanning
+# Usage: Use as main .gitlab-ci.yml or include in existing pipeline
+
+stages:
+  - security
+
+variables:
+  BLOCKING_MODE: "true"  # Set to "false" for non-blocking mode
+  SCAN_SEMGREP: "true"   # Set to "false" to skip Semgrep
+  SCAN_TRIVY: "true"     # Set to "false" to skip Trivy  
+  SCAN_GITLEAKS: "true"  # Set to "false" to skip Gitleaks
+
+# Semgrep SAST Scanning
+semgrep:
+  stage: security
+  image: python:3.11-slim
+  
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  
+  cache:
+    paths:
+      - .cache/pip/
+  
+  before_script:
+    - apt-get update && apt-get install -y git curl jq
+    - pip install semgrep
+  
+  script:
+    - echo "Running Semgrep in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
+    
+    # Run Semgrep scan
+    - |
+      if [ "$BLOCKING_MODE" = "true" ]; then
+        semgrep --config=auto --sarif --output=semgrep.sarif --no-git-ignore --error --severity=ERROR .
+      else
+        semgrep --config=auto --sarif --output=semgrep.sarif --no-git-ignore . || true
+      fi
+    
+    # Display and upload results
+    - |
+      if [ -f semgrep.sarif ]; then
+        FINDINGS=$(jq '[.runs[].results[]] | length' semgrep.sarif 2>/dev/null || echo "0")
+        echo "Semgrep: $FINDINGS findings"
+        
+        # Upload to DefectDojo
+        if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ]; then
+          curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+            -F "scan_type=Semgrep JSON Report" \
+            -F "file=@semgrep.sarif" \
+            -F "product_name=$CI_PROJECT_PATH" \
+            -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+            -F "test_title=Semgrep SAST - $CI_COMMIT_SHA" \
+            -F "active=true" \
+            -F "verified=false" \
+            -F "scan_date=$(date +%Y-%m-%d)" \
+            -F "tags=semgrep,sast,automated,gitlab" || echo "DefectDojo upload failed"
+        fi
+      fi
+  
+  artifacts:
+    when: always
+    paths:
+      - semgrep.sarif
+    reports:
+      sast: semgrep.sarif
+    expire_in: 30 days
+  
+  allow_failure: $BLOCKING_MODE == "false"
+  
+  rules:
+    - if: $SCAN_SEMGREP == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $SCAN_SEMGREP == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop")
+    - if: $SCAN_SEMGREP == "true" && $CI_PIPELINE_SOURCE == "web"
+    - if: $SCAN_SEMGREP == "true" && $CI_PIPELINE_SOURCE == "api"
+
+# Trivy Vulnerability Scanning
+trivy:
+  stage: security
+  image: aquasecurity/trivy:latest
+  
+  variables:
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/trivy"
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_SKIP_VERSION_CHECK: "true"
+  
+  cache:
+    paths:
+      - .cache/trivy/
+  
+  before_script:
+    - apk add --no-cache curl jq
+  
+  script:
+    - echo "Running Trivy in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
+    
+    # Run Trivy scan
+    - |
+      if [ "$BLOCKING_MODE" = "true" ]; then
+        trivy fs --scanners vuln --format sarif --output trivy-results.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 .
+      else
+        trivy fs --scanners vuln --format sarif --output trivy-results.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 . || true
+      fi
+    
+    # Display and upload results
+    - |
+      if [ -f trivy-results.sarif ]; then
+        FINDINGS=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+        echo "Trivy: $FINDINGS findings"
+        
+        # Upload to DefectDojo
+        if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ]; then
+          curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+            -F "scan_type=Trivy Scan" \
+            -F "file=@trivy-results.sarif" \
+            -F "product_name=$CI_PROJECT_PATH" \
+            -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+            -F "test_title=Trivy Vulnerability - $CI_COMMIT_SHA" \
+            -F "active=true" \
+            -F "verified=false" \
+            -F "scan_date=$(date +%Y-%m-%d)" \
+            -F "tags=trivy,vulnerability,dependency,gitlab" || echo "DefectDojo upload failed"
+        fi
+      fi
+  
+  artifacts:
+    when: always
+    paths:
+      - trivy-results.sarif
+    reports:
+      dependency_scanning: trivy-results.sarif
+    expire_in: 30 days
+  
+  allow_failure: $BLOCKING_MODE == "false"
+  
+  rules:
+    - if: $SCAN_TRIVY == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $SCAN_TRIVY == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop")
+    - if: $SCAN_TRIVY == "true" && $CI_PIPELINE_SOURCE == "web"
+    - if: $SCAN_TRIVY == "true" && $CI_PIPELINE_SOURCE == "api"
+
+# Gitleaks Secret Scanning
+gitleaks:
+  stage: security
+  image: alpine:latest
+  
+  before_script:
+    - apk add --no-cache wget tar curl jq
+    - echo "Installing Gitleaks..."
+    - wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
+    - tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
+    - mv gitleaks /usr/local/bin/
+    - gitleaks version
+  
+  script:
+    - echo "Running Gitleaks in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
+    
+    # Run Gitleaks scan
+    - |
+      if [ "$BLOCKING_MODE" = "true" ]; then
+        EXIT_CODE=1
+      else
+        EXIT_CODE=0
+      fi
+      
+      gitleaks detect \
+        --source=. \
+        --report-format=sarif \
+        --report-path=gitleaks-results.sarif \
+        --exit-code=$EXIT_CODE \
+        --verbose || [ "$BLOCKING_MODE" = "false" ]
+    
+    # Create empty SARIF if needed
+    - |
+      if [ ! -f gitleaks-results.sarif ]; then
+        echo '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks","version":"8.18.0"}},"results":[]}]}' > gitleaks-results.sarif
+      fi
+    
+    # Display and upload results
+    - |
+      if [ -f gitleaks-results.sarif ]; then
+        SECRETS=$(jq '[.runs[].results[]] | length' gitleaks-results.sarif 2>/dev/null || echo "0")
+        echo "Gitleaks: $SECRETS secrets found"
+        
+        # Upload to DefectDojo
+        if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ]; then
+          curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+            -F "scan_type=Gitleaks Scan" \
+            -F "file=@gitleaks-results.sarif" \
+            -F "product_name=$CI_PROJECT_PATH" \
+            -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+            -F "test_title=Gitleaks Secret - $CI_COMMIT_SHA" \
+            -F "active=true" \
+            -F "verified=false" \
+            -F "scan_date=$(date +%Y-%m-%d)" \
+            -F "tags=gitleaks,secrets,credentials,gitlab" || echo "DefectDojo upload failed"
+        fi
+      fi
+  
+  artifacts:
+    when: always
+    paths:
+      - gitleaks-results.sarif
+    expire_in: 30 days
+  
+  allow_failure: $BLOCKING_MODE == "false"
+  
+  rules:
+    - if: $SCAN_GITLEAKS == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $SCAN_GITLEAKS == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop")
+    - if: $SCAN_GITLEAKS == "true" && $CI_PIPELINE_SOURCE == "web"
+    - if: $SCAN_GITLEAKS == "true" && $CI_PIPELINE_SOURCE == "api"

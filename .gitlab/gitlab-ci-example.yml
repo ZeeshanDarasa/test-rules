@@ -1,0 +1,58 @@
+# Example .gitlab-ci.yml for using the security scanning pipelines
+# Copy this content to your repository's .gitlab-ci.yml file
+
+# Option 1: Use the combined security scan pipeline
+include:
+  - local: '.gitlab/security-scan.yml'
+
+# Option 2: Use individual scanner pipelines
+# include:
+#   - local: '.gitlab/semgrep.yml'
+#   - local: '.gitlab/trivy.yml'
+#   - local: '.gitlab/gitleaks.yml'
+
+# Global variables (can be overridden per project)
+variables:
+  # Security scan configuration
+  BLOCKING_MODE: "true"        # Set to "false" for non-blocking scans
+  SCAN_SEMGREP: "true"         # Enable/disable Semgrep
+  SCAN_TRIVY: "true"           # Enable/disable Trivy
+  SCAN_GITLEAKS: "true"        # Enable/disable Gitleaks
+  
+  # DefectDojo integration (configure in GitLab CI/CD variables)
+  # DEFECTDOJO_URL: "https://your-defectdojo-instance.com"
+  # DEFECTDOJO_TOKEN: "your-api-token"
+
+# Example of how to add your own stages alongside security scanning
+stages:
+  - test
+  - security
+  - deploy
+
+# Example test job (runs before security)
+test:
+  stage: test
+  image: python:3.11
+  script:
+    - echo "Running tests..."
+    - # Add your test commands here
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+
+# Example deploy job (runs after security if no blocking issues)
+deploy:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - echo "Deploying application..."
+    - # Add your deployment commands here
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  needs:
+    - job: semgrep
+      optional: true
+    - job: trivy
+      optional: true
+    - job: gitleaks
+      optional: true

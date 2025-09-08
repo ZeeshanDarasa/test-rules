@@ -1,0 +1,119 @@
+# GitLab CI Pipeline for Trivy Vulnerability Scanning
+# Usage: Include this file in your main .gitlab-ci.yml or run as standalone pipeline
+
+stages:
+  - security
+
+variables:
+  BLOCKING_MODE: "true"  # Set to "false" for non-blocking mode
+
+.trivy_template: &trivy_template
+  stage: security
+  image: aquasecurity/trivy:latest
+  
+  variables:
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/trivy"
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_SKIP_VERSION_CHECK: "true"
+  
+  cache:
+    paths:
+      - .cache/trivy/
+  
+  before_script:
+    - apk add --no-cache curl jq
+  
+  script:
+    - echo "Running Trivy in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
+    
+    # Run Trivy scan
+    - |
+      if [ "$BLOCKING_MODE" = "true" ]; then
+        echo "BLOCKING mode - will fail on vulnerabilities"
+        trivy fs \
+          --scanners vuln \
+          --format sarif \
+          --output trivy-results.sarif \
+          --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+          --exit-code 1 \
+          .
+      else
+        echo "NON-BLOCKING mode - will not fail on vulnerabilities"
+        trivy fs \
+          --scanners vuln \
+          --format sarif \
+          --output trivy-results.sarif \
+          --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+          --exit-code 0 \
+          . || true
+      fi
+    
+    # Display results
+    - |
+      if [ -f trivy-results.sarif ]; then
+        TOTAL=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+        HIGH=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-results.sarif 2>/dev/null || echo "0")
+        
+        echo "Trivy scan completed with $TOTAL total findings ($HIGH high/critical)"
+        
+        if [ "$HIGH" -gt 0 ]; then
+          echo "High/Critical vulnerabilities found:"
+          jq -r '.runs[].results[] | select(.level == "error") | "- \(.ruleId // "CVE"): \(.message.text)"' trivy-results.sarif | head -10
+        fi
+      else
+        echo "No SARIF file generated"
+      fi
+    
+    # Upload to DefectDojo (if configured)
+    - |
+      if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ] && [ -f trivy-results.sarif ]; then
+        echo "Uploading results to DefectDojo..."
+        curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+          -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+          -F "scan_type=Trivy Scan" \
+          -F "file=@trivy-results.sarif" \
+          -F "product_name=$CI_PROJECT_PATH" \
+          -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+          -F "test_title=Trivy Vulnerability - $CI_COMMIT_SHA" \
+          -F "active=true" \
+          -F "verified=false" \
+          -F "scan_date=$(date +%Y-%m-%d)" \
+          -F "tags=trivy,vulnerability,dependency,gitlab" || echo "DefectDojo upload failed"
+      else
+        echo "DefectDojo not configured or no SARIF file - skipping upload"
+      fi
+  
+  artifacts:
+    when: always
+    paths:
+      - trivy-results.sarif
+    reports:
+      dependency_scanning: trivy-results.sarif
+    expire_in: 30 days
+  
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+
+# Job definitions
+trivy:blocking:
+  <<: *trivy_template
+  variables:
+    BLOCKING_MODE: "true"
+  rules:
+    - if: $TRIVY_BLOCKING_MODE == "true"
+    - if: $BLOCKING_MODE == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $BLOCKING_MODE == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop")
+    - if: $CI_PIPELINE_SOURCE == "web" && $BLOCKING_MODE != "false"
+
+trivy:non-blocking:
+  <<: *trivy_template
+  variables:
+    BLOCKING_MODE: "false"
+  allow_failure: true
+  rules:
+    - if: $TRIVY_BLOCKING_MODE == "false"
+    - if: $BLOCKING_MODE == "false"
+    - if: $CI_PIPELINE_SOURCE == "web" && $BLOCKING_MODE == "false"
