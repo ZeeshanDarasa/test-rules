@@ -67,7 +67,7 @@ semgrep:
       sast: semgrep.sarif
     expire_in: 30 days
   
-  allow_failure: $BLOCKING_MODE == "false"
+  allow_failure: false
   
   rules:
     - if: $SCAN_SEMGREP == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -133,7 +133,7 @@ trivy:
       dependency_scanning: trivy-results.sarif
     expire_in: 30 days
   
-  allow_failure: $BLOCKING_MODE == "false"
+  allow_failure: false
   
   rules:
     - if: $SCAN_TRIVY == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -206,7 +206,7 @@ gitleaks:
       - gitleaks-results.sarif
     expire_in: 30 days
   
-  allow_failure: $BLOCKING_MODE == "false"
+  allow_failure: false
   
   rules:
     - if: $SCAN_GITLEAKS == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
