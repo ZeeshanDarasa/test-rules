@@ -13,18 +13,10 @@ variables:
 # Semgrep SAST Scanning
 semgrep:
   stage: security
-  image: python:3.11-slim
-  
-  variables:
-    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  
-  cache:
-    paths:
-      - .cache/pip/
+  image: sqasupport/semgrep:latest
   
   before_script:
-    - apt-get update && apt-get install -y git curl jq
-    - pip install semgrep
+    - apk add --no-cache curl jq || apt-get update && apt-get install -y curl jq
   
   script:
     - echo "Running Semgrep in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
@@ -32,15 +24,15 @@ semgrep:
     # Run Semgrep scan
     - |
       if [ "$BLOCKING_MODE" = "true" ]; then
-        semgrep --config=auto --sarif --output=semgrep.sarif --no-git-ignore --error --severity=ERROR .
+        semgrep scan /src --dataflow-traces --config=/rules --metrics=off --sarif --sarif-output=semgrep-report-projectname.sarif --error --severity=ERROR
       else
-        semgrep --config=auto --sarif --output=semgrep.sarif --no-git-ignore . || true
+        semgrep scan /src --dataflow-traces --config=/rules --metrics=off --sarif --sarif-output=semgrep-report-projectname.sarif || true
       fi
     
     # Display and upload results
     - |
-      if [ -f semgrep.sarif ]; then
-        FINDINGS=$(jq '[.runs[].results[]] | length' semgrep.sarif 2>/dev/null || echo "0")
+      if [ -f semgrep-report-projectname.sarif ]; then
+        FINDINGS=$(jq '[.runs[].results[]] | length' semgrep-report-projectname.sarif 2>/dev/null || echo "0")
         echo "Semgrep: $FINDINGS findings"
         
         # Upload to DefectDojo
@@ -48,7 +40,7 @@ semgrep:
           curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DEFECTDOJO_TOKEN" \
             -F "scan_type=Semgrep JSON Report" \
-            -F "file=@semgrep.sarif" \
+            -F "file=@semgrep-report-projectname.sarif" \
             -F "product_name=$CI_PROJECT_PATH" \
             -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
             -F "test_title=Semgrep SAST - $CI_COMMIT_SHA" \
@@ -62,9 +54,9 @@ semgrep:
   artifacts:
     when: always
     paths:
-      - semgrep.sarif
+      - semgrep-report-projectname.sarif
     reports:
-      sast: semgrep.sarif
+      sast: semgrep-report-projectname.sarif
     expire_in: 30 days
   
   allow_failure: false
@@ -78,16 +70,7 @@ semgrep:
 # Trivy Vulnerability Scanning
 trivy:
   stage: security
-  image: aquasec/trivy:0.66.0
-  
-  variables:
-    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/trivy"
-    TRIVY_NO_PROGRESS: "true"
-    TRIVY_SKIP_VERSION_CHECK: "true"
-  
-  cache:
-    paths:
-      - .cache/trivy/
+  image: sqasupport/trivy:latest
   
   before_script:
     - apk add --no-cache curl jq
@@ -98,15 +81,15 @@ trivy:
     # Run Trivy scan
     - |
       if [ "$BLOCKING_MODE" = "true" ]; then
-        trivy fs --scanners vuln --format sarif --output trivy-results.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 .
+        trivy fs /src --scanners vuln --skip-db-update --include-dev-deps --format sarif --exit-code 1 > sca-report-projectname.sarif
       else
-        trivy fs --scanners vuln --format sarif --output trivy-results.sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 . || true
+        trivy fs /src --scanners vuln --skip-db-update --include-dev-deps --format sarif --exit-code 0 > sca-report-projectname.sarif || true
       fi
     
     # Display and upload results
     - |
-      if [ -f trivy-results.sarif ]; then
-        FINDINGS=$(jq '[.runs[].results[]] | length' trivy-results.sarif 2>/dev/null || echo "0")
+      if [ -f sca-report-projectname.sarif ]; then
+        FINDINGS=$(jq '[.runs[].results[]] | length' sca-report-projectname.sarif 2>/dev/null || echo "0")
         echo "Trivy: $FINDINGS findings"
         
         # Upload to DefectDojo
@@ -114,7 +97,7 @@ trivy:
           curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DEFECTDOJO_TOKEN" \
             -F "scan_type=Trivy Scan" \
-            -F "file=@trivy-results.sarif" \
+            -F "file=@sca-report-projectname.sarif" \
             -F "product_name=$CI_PROJECT_PATH" \
             -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
             -F "test_title=Trivy Vulnerability - $CI_COMMIT_SHA" \
@@ -128,9 +111,9 @@ trivy:
   artifacts:
     when: always
     paths:
-      - trivy-results.sarif
+      - sca-report-projectname.sarif
     reports:
-      dependency_scanning: trivy-results.sarif
+      dependency_scanning: sca-report-projectname.sarif
     expire_in: 30 days
   
   allow_failure: false
@@ -144,15 +127,10 @@ trivy:
 # Gitleaks Secret Scanning
 gitleaks:
   stage: security
-  image: alpine:latest
+  image: zricethezav/gitleaks:latest
   
   before_script:
-    - apk add --no-cache wget tar curl jq
-    - echo "Installing Gitleaks..."
-    - wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
-    - tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
-    - mv gitleaks /usr/local/bin/
-    - gitleaks version
+    - apk add --no-cache curl jq
   
   script:
     - echo "Running Gitleaks in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
@@ -165,23 +143,18 @@ gitleaks:
         EXIT_CODE=0
       fi
       
-      gitleaks detect \
-        --source=. \
-        --report-format=sarif \
-        --report-path=gitleaks-results.sarif \
-        --exit-code=$EXIT_CODE \
-        --verbose || [ "$BLOCKING_MODE" = "false" ]
+      gitleaks dir /src -f sarif -r /src/gitleaks-projectname.sarif --exit-code=$EXIT_CODE || [ "$BLOCKING_MODE" = "false" ]
     
     # Create empty SARIF if needed
     - |
-      if [ ! -f gitleaks-results.sarif ]; then
-        echo '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks","version":"8.18.0"}},"results":[]}]}' > gitleaks-results.sarif
+      if [ ! -f gitleaks-projectname.sarif ]; then
+        echo '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks","version":"latest"}},"results":[]}]}' > gitleaks-projectname.sarif
       fi
     
     # Display and upload results
     - |
-      if [ -f gitleaks-results.sarif ]; then
-        SECRETS=$(jq '[.runs[].results[]] | length' gitleaks-results.sarif 2>/dev/null || echo "0")
+      if [ -f gitleaks-projectname.sarif ]; then
+        SECRETS=$(jq '[.runs[].results[]] | length' gitleaks-projectname.sarif 2>/dev/null || echo "0")
         echo "Gitleaks: $SECRETS secrets found"
         
         # Upload to DefectDojo
@@ -189,7 +162,7 @@ gitleaks:
           curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DEFECTDOJO_TOKEN" \
             -F "scan_type=Gitleaks Scan" \
-            -F "file=@gitleaks-results.sarif" \
+            -F "file=@gitleaks-projectname.sarif" \
             -F "product_name=$CI_PROJECT_PATH" \
             -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
             -F "test_title=Gitleaks Secret - $CI_COMMIT_SHA" \
@@ -203,7 +176,7 @@ gitleaks:
   artifacts:
     when: always
     paths:
-      - gitleaks-results.sarif
+      - gitleaks-projectname.sarif
     expire_in: 30 days
   
   allow_failure: false
