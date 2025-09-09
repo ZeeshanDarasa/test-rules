@@ -9,7 +9,7 @@ variables:
 
 .trivy_template: &trivy_template
   stage: security
-  image: aquasecurity/trivy:latest
+  image: aquasec/trivy:0.66.0
   
   variables:
     TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/trivy"
