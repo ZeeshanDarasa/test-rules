@@ -85,17 +85,65 @@ jobs:
               DEFECTDOJO_URL=$(echo "$DEFECTDOJO_URL" | tr -d '[:space:]')
               echo "Debug: Cleaned URL = '$DEFECTDOJO_URL'"
               
+              # Set variables
+              PRODUCT_NAME="github"
+              ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)"
+              
+              # Step 1: Create/Get Product
+              echo "Creating/Getting product: $PRODUCT_NAME"
+              PRODUCT_RESPONSE=$(curl -s -X GET "${DEFECTDOJO_URL}/api/v2/products/?name=${PRODUCT_NAME}" \
+                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}")
+              
+              PRODUCT_COUNT=$(echo "$PRODUCT_RESPONSE" | jq -r '.count // 0')
+              
+              if [ "$PRODUCT_COUNT" -eq 0 ]; then
+                echo "Product doesn't exist, creating it..."
+                curl -s -X POST "${DEFECTDOJO_URL}/api/v2/products/" \
+                  -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"name\":\"${PRODUCT_NAME}\",\"description\":\"GitHub Security Scans\",\"prod_type\":1}" > /dev/null
+                echo "Product created successfully"
+              else
+                echo "Product already exists"
+              fi
+              
+              # Get Product ID
+              PRODUCT_ID=$(curl -s -X GET "${DEFECTDOJO_URL}/api/v2/products/?name=${PRODUCT_NAME}" \
+                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" | jq -r '.results[0].id')
+              
+              # Step 2: Create/Get Engagement
+              echo "Creating/Getting engagement: $ENGAGEMENT_NAME"
+              ENGAGEMENT_RESPONSE=$(curl -s -X GET "${DEFECTDOJO_URL}/api/v2/engagements/?name=${ENGAGEMENT_NAME}&product=${PRODUCT_ID}" \
+                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}")
+              
+              ENGAGEMENT_COUNT=$(echo "$ENGAGEMENT_RESPONSE" | jq -r '.count // 0')
+              
+              if [ "$ENGAGEMENT_COUNT" -eq 0 ]; then
+                echo "Engagement doesn't exist, creating it..."
+                curl -s -X POST "${DEFECTDOJO_URL}/api/v2/engagements/" \
+                  -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"name\":\"${ENGAGEMENT_NAME}\",\"product\":${PRODUCT_ID},\"target_start\":\"$(date +%Y-%m-%d)\",\"target_end\":\"$(date -d '+30 days' +%Y-%m-%d)\"}" > /dev/null
+                echo "Engagement created successfully"
+              else
+                echo "Engagement already exists"
+              fi
+              
+              # Step 3: Upload Scan Results
+              echo "Uploading scan results..."
               curl -X POST "${DEFECTDOJO_URL}/api/v2/import-scan/" \
                 -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
                 -F "scan_type=Trivy Scan" \
                 -F "file=@trivy-results.sarif" \
-                -F "product_name=github" \
-                -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+                -F "product_name=${PRODUCT_NAME}" \
+                -F "engagement_name=${ENGAGEMENT_NAME}" \
                 -F "test_title=Trivy Vulnerability - ${{ github.sha }}" \
                 -F "active=true" \
                 -F "verified=false" \
                 -F "scan_date=$(date +%Y-%m-%d)" \
-                -F "tags=trivy,vulnerability,dependency" || echo "DefectDojo upload failed"
+                -F "tags=trivy,vulnerability,dependency,github" || echo "DefectDojo upload failed"
+              
+              echo "DefectDojo upload completed"
             else
               echo "DefectDojo secrets not configured - skipping upload"
             fi
