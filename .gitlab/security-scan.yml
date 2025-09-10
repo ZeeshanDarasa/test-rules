@@ -16,17 +16,28 @@ semgrep:
   image: sqasupport/semgrep:latest
   
   before_script:
-    - apk add --no-cache curl jq || apt-get update && apt-get install -y curl jq
+    - apk add --no-cache curl jq || (apt-get update && apt-get install -y curl jq) || echo "Dependencies may already be installed"
   
   script:
     - echo "Running Semgrep in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
     
     # Run Semgrep scan
     - |
+      echo "Running Semgrep SAST scan..."
+      # Always run without --error first to ensure SARIF is generated
+      semgrep scan . --dataflow-traces --config=p/security-audit --config=p/secrets --metrics=off --sarif --sarif-output=semgrep-report-projectname.sarif || true
+      
+      # Store scan result for later use
+      SEMGREP_SCAN_RESULT=0
       if [ "$BLOCKING_MODE" = "true" ]; then
-        semgrep scan /src --dataflow-traces --config=/rules --metrics=off --sarif --sarif-output=semgrep-report-projectname.sarif --error --severity=ERROR
-      else
-        semgrep scan /src --dataflow-traces --config=/rules --metrics=off --sarif --sarif-output=semgrep-report-projectname.sarif || true
+        # Check if findings were found with ERROR severity
+        if [ -f semgrep-report-projectname.sarif ]; then
+          ERROR_COUNT=$(jq '[.runs[].results[] | select(.level == "error")] | length' semgrep-report-projectname.sarif 2>/dev/null || echo "0")
+          if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "ERROR level findings found in blocking mode - will fail after DefectDojo upload"
+            SEMGREP_SCAN_RESULT=1
+          fi
+        fi
       fi
     
     # Display and upload results
@@ -37,18 +48,79 @@ semgrep:
         
         # Upload to DefectDojo
         if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ]; then
-          curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+          echo "Uploading Semgrep findings to DefectDojo..."
+          
+          # DefectDojo configuration
+          PRODUCT_NAME="gitlab"
+          ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)"
+          
+          # Simplified approach: Use import-scan auto-create feature
+          echo "Using DefectDojo auto-create feature for product and engagement..."
+          
+          # First, try to get product ID to verify it exists
+          PRODUCT_RESPONSE=$(curl -s -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+            "$DEFECTDOJO_URL/api/v2/products/?name=$PRODUCT_NAME")
+          PRODUCT_COUNT=$(echo "$PRODUCT_RESPONSE" | jq '.count' 2>/dev/null || echo "0")
+          
+          if [ "$PRODUCT_COUNT" = "0" ]; then
+            echo "Creating product '$PRODUCT_NAME'..."
+            CREATE_PRODUCT=$(curl -s -X POST "$DEFECTDOJO_URL/api/v2/products/" \
+              -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$PRODUCT_NAME\",\"description\":\"GitLab Security Scanning Product\",\"prod_type\":1}")
+            echo "Product creation response: $CREATE_PRODUCT"
+          else
+            echo "✅ Product '$PRODUCT_NAME' already exists"
+          fi
+          
+          # Get product ID
+          PRODUCT_ID=$(curl -s -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+            "$DEFECTDOJO_URL/api/v2/products/?name=$PRODUCT_NAME" | jq '.results[0].id' 2>/dev/null)
+          echo "Product ID: $PRODUCT_ID"
+          
+          if [ -n "$PRODUCT_ID" ] && [ "$PRODUCT_ID" != "null" ]; then
+            # Create engagement directly
+            echo "Creating engagement '$ENGAGEMENT_NAME'..."
+            CREATE_ENGAGEMENT=$(curl -s -X POST "$DEFECTDOJO_URL/api/v2/engagements/" \
+              -H "Authorization: Token $DEFECTDOJO_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$ENGAGEMENT_NAME\",\"product\":$PRODUCT_ID,\"target_start\":\"$(date +%Y-%m-%d)\",\"target_end\":\"$(date -d '+7 days' +%Y-%m-%d)\"}")
+            echo "Engagement creation response: $CREATE_ENGAGEMENT"
+            echo "✅ Product and engagement setup completed"
+          fi
+          
+          # Upload scan results with auto-create flags
+          echo "Uploading scan results..."
+          RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DEFECTDOJO_TOKEN" \
-            -F "scan_type=Semgrep JSON Report" \
+            -H "Content-Type: multipart/form-data" \
+            -F "scan_type=SARIF" \
             -F "file=@semgrep-report-projectname.sarif" \
-            -F "product_name=$CI_PROJECT_PATH" \
-            -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+            -F "product_name=$PRODUCT_NAME" \
+            -F "engagement_name=$ENGAGEMENT_NAME" \
+            -F "auto_create_context=true" \
             -F "test_title=Semgrep SAST - $CI_COMMIT_SHA" \
             -F "active=true" \
             -F "verified=false" \
             -F "scan_date=$(date +%Y-%m-%d)" \
-            -F "tags=semgrep,sast,automated,gitlab" || echo "DefectDojo upload failed"
+            -F "tags=semgrep,sast,automated,gitlab")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Semgrep findings successfully uploaded to DefectDojo"
+          else
+            echo "❌ DefectDojo upload failed with HTTP code: $HTTP_CODE"
+            echo "Response: $(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*//')"
+          fi
+        else
+          echo "DefectDojo integration not configured"
         fi
+      fi
+      
+      # Exit with appropriate code after DefectDojo upload
+      if [ "$SEMGREP_SCAN_RESULT" -eq 1 ]; then
+        echo "Exiting with code 1 due to ERROR level findings in blocking mode"
+        exit 1
       fi
   
   artifacts:
@@ -59,7 +131,7 @@ semgrep:
       sast: semgrep-report-projectname.sarif
     expire_in: 30 days
   
-  allow_failure: false
+  allow_failure: true  # Allow failure - security gate will enforce branch protection
   
   rules:
     - if: $SCAN_SEMGREP == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -70,20 +142,47 @@ semgrep:
 # Trivy Vulnerability Scanning
 trivy:
   stage: security
-  image: sqasupport/trivy:latest
+  image: alpine:latest
   
   before_script:
-    - apk add --no-cache curl jq
+    - apk add --no-cache curl jq wget
+    # Install Trivy
+    - |
+      echo "Installing Trivy..."
+      TRIVY_VERSION=$(curl -s https://api.github.com/repos/aquasecurity/trivy/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+      echo "Latest Trivy version: $TRIVY_VERSION"
+      
+      # Download and install Trivy
+      wget -O trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-64bit.tar.gz"
+      tar -xzf trivy.tar.gz
+      chmod +x trivy
+      mv trivy /usr/local/bin/
+      echo "Trivy installed successfully"
+      trivy version
   
   script:
     - echo "Running Trivy in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
     
     # Run Trivy scan
     - |
+      echo "Downloading Trivy vulnerability database..."
+      trivy --cache-dir /tmp/.trivy fs --download-db-only .
+      
+      echo "Running Trivy vulnerability scan..."
+      # Always run with exit-code 0 first to ensure SARIF is generated
+      trivy fs . --scanners vuln --cache-dir /tmp/.trivy --include-dev-deps --format sarif --exit-code 0 > sca-report-projectname.sarif || true
+      
+      # Store scan result for later use
+      TRIVY_SCAN_RESULT=0
       if [ "$BLOCKING_MODE" = "true" ]; then
-        trivy fs /src --scanners vuln --skip-db-update --include-dev-deps --format sarif --exit-code 1 > sca-report-projectname.sarif
-      else
-        trivy fs /src --scanners vuln --skip-db-update --include-dev-deps --format sarif --exit-code 0 > sca-report-projectname.sarif || true
+        # Check if vulnerabilities were found
+        if [ -f sca-report-projectname.sarif ]; then
+          VULN_COUNT=$(jq '[.runs[].results[]] | length' sca-report-projectname.sarif 2>/dev/null || echo "0")
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            echo "Vulnerabilities found in blocking mode - will fail after DefectDojo upload"
+            TRIVY_SCAN_RESULT=1
+          fi
+        fi
       fi
     
     # Display and upload results
@@ -94,18 +193,45 @@ trivy:
         
         # Upload to DefectDojo
         if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ]; then
-          curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+          echo "Uploading Trivy findings to DefectDojo..."
+          
+          # DefectDojo configuration
+          PRODUCT_NAME="gitlab"
+          ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)"
+          
+          # Note: Product and engagement creation is handled by Semgrep job (runs first)
+          # Just proceed with upload using SARIF format for Trivy
+          
+          RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DEFECTDOJO_TOKEN" \
-            -F "scan_type=Trivy Scan" \
+            -H "Content-Type: multipart/form-data" \
+            -F "scan_type=SARIF" \
             -F "file=@sca-report-projectname.sarif" \
-            -F "product_name=$CI_PROJECT_PATH" \
-            -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+            -F "product_name=$PRODUCT_NAME" \
+            -F "engagement_name=$ENGAGEMENT_NAME" \
+            -F "auto_create_context=true" \
             -F "test_title=Trivy Vulnerability - $CI_COMMIT_SHA" \
             -F "active=true" \
             -F "verified=false" \
             -F "scan_date=$(date +%Y-%m-%d)" \
-            -F "tags=trivy,vulnerability,dependency,gitlab" || echo "DefectDojo upload failed"
+            -F "tags=trivy,vulnerability,dependency,gitlab")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Trivy findings successfully uploaded to DefectDojo"
+          else
+            echo "❌ DefectDojo upload failed with HTTP code: $HTTP_CODE"
+            echo "Response: $(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*//')"
+          fi
+        else
+          echo "DefectDojo integration not configured"
         fi
+      fi
+      
+      # Exit with appropriate code after DefectDojo upload
+      if [ "$TRIVY_SCAN_RESULT" -eq 1 ]; then
+        echo "Exiting with code 1 due to vulnerabilities found in blocking mode"
+        exit 1
       fi
   
   artifacts:
@@ -116,7 +242,7 @@ trivy:
       dependency_scanning: sca-report-projectname.sarif
     expire_in: 30 days
   
-  allow_failure: false
+  allow_failure: true  # Allow failure - security gate will enforce branch protection
   
   rules:
     - if: $SCAN_TRIVY == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -127,23 +253,71 @@ trivy:
 # Gitleaks Secret Scanning
 gitleaks:
   stage: security
-  image: zricethezav/gitleaks:latest
+  image: alpine:latest
   
   before_script:
-    - apk add --no-cache curl jq
+    - apk add --no-cache curl jq wget git
+    # Get latest release info and download gitleaks
+    - |
+      echo "Fetching latest Gitleaks release information..."
+      RELEASE_INFO=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest)
+      GITLEAKS_VERSION=$(echo "$RELEASE_INFO" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+      echo "Latest version: $GITLEAKS_VERSION"
+      
+      # Get the actual download URL for linux_x64 from the API
+      DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep '"browser_download_url":.*linux.*x64.*\.tar\.gz"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+      
+      if [ -z "$DOWNLOAD_URL" ]; then
+        # Try alternative naming patterns
+        DOWNLOAD_URL="https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+      fi
+      
+      echo "Download URL: $DOWNLOAD_URL"
+      
+      # Download and extract
+      if wget -O gitleaks.tar.gz "$DOWNLOAD_URL"; then
+        echo "Download successful, extracting..."
+        tar -xzf gitleaks.tar.gz
+        chmod +x gitleaks
+        mv gitleaks /usr/local/bin/
+        echo "Gitleaks installed successfully"
+        gitleaks version
+      else
+        echo "Download failed, trying direct binary download..."
+        # Try direct binary without tar.gz
+        BINARY_URL="https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks-linux-amd64"
+        if wget -O gitleaks "$BINARY_URL"; then
+          chmod +x gitleaks
+          mv gitleaks /usr/local/bin/
+          echo "Gitleaks binary installed successfully"
+          gitleaks version
+        else
+          echo "All download attempts failed. Exiting."
+          exit 1
+        fi
+      fi
   
   script:
     - echo "Running Gitleaks in $([ "$BLOCKING_MODE" = "true" ] && echo "BLOCKING" || echo "NON-BLOCKING") mode"
     
     # Run Gitleaks scan
     - |
-      if [ "$BLOCKING_MODE" = "true" ]; then
-        EXIT_CODE=1
-      else
-        EXIT_CODE=0
-      fi
+      echo "Running Gitleaks secret detection scan..."
+      # Always run with exit-code 0 first to ensure SARIF is generated
+      gitleaks detect --source=. --report-format=sarif --report-path=gitleaks-projectname.sarif --exit-code=0 || true
       
-      gitleaks dir /src -f sarif -r /src/gitleaks-projectname.sarif --exit-code=$EXIT_CODE || [ "$BLOCKING_MODE" = "false" ]
+      # Store scan result for later use
+      GITLEAKS_SCAN_RESULT=0
+      if [ "$BLOCKING_MODE" = "true" ]; then
+        # Check if secrets were found
+        if [ -f gitleaks-projectname.sarif ]; then
+          SECRET_COUNT=$(jq '[.runs[].results[]] | length' gitleaks-projectname.sarif 2>/dev/null || echo "0")
+          if [ "$SECRET_COUNT" -gt 0 ]; then
+            echo "Secrets found in blocking mode - will fail after DefectDojo upload"
+            GITLEAKS_SCAN_RESULT=1
+          fi
+        fi
+      fi
     
     # Create empty SARIF if needed
     - |
@@ -159,18 +333,45 @@ gitleaks:
         
         # Upload to DefectDojo
         if [ -n "$DEFECTDOJO_URL" ] && [ -n "$DEFECTDOJO_TOKEN" ]; then
-          curl -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
+          echo "Uploading Gitleaks findings to DefectDojo..."
+          
+          # DefectDojo configuration
+          PRODUCT_NAME="gitlab"
+          ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)"
+          
+          # Note: Product and engagement creation is handled by Semgrep job (runs first)
+          # Just proceed with upload using SARIF format for Gitleaks
+          
+          RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" -X POST "$DEFECTDOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DEFECTDOJO_TOKEN" \
-            -F "scan_type=Gitleaks Scan" \
+            -H "Content-Type: multipart/form-data" \
+            -F "scan_type=SARIF" \
             -F "file=@gitleaks-projectname.sarif" \
-            -F "product_name=$CI_PROJECT_PATH" \
-            -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+            -F "product_name=$PRODUCT_NAME" \
+            -F "engagement_name=$ENGAGEMENT_NAME" \
+            -F "auto_create_context=true" \
             -F "test_title=Gitleaks Secret - $CI_COMMIT_SHA" \
             -F "active=true" \
             -F "verified=false" \
             -F "scan_date=$(date +%Y-%m-%d)" \
-            -F "tags=gitleaks,secrets,credentials,gitlab" || echo "DefectDojo upload failed"
+            -F "tags=gitleaks,secrets,credentials,gitlab")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Gitleaks findings successfully uploaded to DefectDojo"
+          else
+            echo "❌ DefectDojo upload failed with HTTP code: $HTTP_CODE"
+            echo "Response: $(echo "$RESPONSE" | sed 's/HTTP_CODE:[0-9]*//')"
+          fi
+        else
+          echo "DefectDojo integration not configured"
         fi
+      fi
+      
+      # Exit with appropriate code after DefectDojo upload
+      if [ "$GITLEAKS_SCAN_RESULT" -eq 1 ]; then
+        echo "Exiting with code 1 due to secrets found in blocking mode"
+        exit 1
       fi
   
   artifacts:
@@ -179,7 +380,7 @@ gitleaks:
       - gitleaks-projectname.sarif
     expire_in: 30 days
   
-  allow_failure: false
+  allow_failure: true  # Allow failure - security gate will enforce branch protection
   
   rules:
     - if: $SCAN_GITLEAKS == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"

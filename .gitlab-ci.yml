@@ -1,32 +1,200 @@
-# GitLab CI Pipeline for Security Scanning Only
-# Configured for local GitLab CE instance
-
 # Include the security scanning pipeline
 include:
   - local: '.gitlab/security-scan.yml'
 
-# Global variables - customize for your GitLab CE instance
+# Global variables - Branch Protection Configuration
 variables:
-  # Security scan configuration
-  BLOCKING_MODE: "true"        # Set to "false" for non-blocking scans
+  # Security scan configuration - Always blocking for branch protection
+  BLOCKING_MODE: "true"        # Must be true for branch protection to work
   SCAN_SEMGREP: "true"         # Enable Semgrep SAST scanning
   SCAN_TRIVY: "true"           # Enable Trivy vulnerability scanning
   SCAN_GITLEAKS: "true"        # Enable Gitleaks secret scanning
   
+  # Branch protection settings
+  ENFORCE_BRANCH_PROTECTION: "true"  # Enable GitLab branch protection enforcement
+  
   # DefectDojo integration (configure these in GitLab CI/CD variables)
-  # DEFECTDOJO_URL: "https://your-defectdojo-instance.com"
-  # DEFECTDOJO_TOKEN: "your-api-token"
+  DEFECTDOJO_URL: "https://c9d0c1530abe.ngrok-free.app"
+  DEFECTDOJO_TOKEN: "d5ebd60db81a7f286e5953a95deafc4bf7c7459c"
 
-# Single stage - security only
+# Enhanced stages for comprehensive security scanning with branch protection
 stages:
   - security
+  - security-gate
+  - report
 
-# Pipeline rules - when to run
+# Pipeline rules - Enhanced for branch protection
 workflow:
   rules:
+    # Always run on merge requests (required for protected branches)
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # Run on main branch pushes (should be restricted to merge only in GitLab settings)
     - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        BLOCKING_MODE: "true"  # Always block on main branch failures
+    # Run on develop branch pushes
     - if: $CI_COMMIT_BRANCH == "develop" 
+      variables:
+        BLOCKING_MODE: "true"  # Always block on develop branch failures
+    # Manual pipeline triggers
     - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_PIPELINE_SOURCE == "api"
-    - if: $CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop")
+    # Feature branch pushes (for development)
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != "main" && $CI_COMMIT_BRANCH != "develop"
+      variables:
+        BLOCKING_MODE: "false"  # Non-blocking for feature branches
+
+# Security Gate - Branch Protection Enforcer
+security_gate:
+  stage: security-gate
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache jq
+  script:
+    - echo "🛡️ SECURITY GATE - BRANCH PROTECTION ENFORCEMENT"
+    - echo "Branch:" $CI_COMMIT_BRANCH "| Pipeline:" $CI_PIPELINE_ID "| Commit:" $CI_COMMIT_SHORT_SHA
+    - echo ""
+    - |
+      # Analyze security scan results
+      TOTAL_CRITICAL_ISSUES=0
+      SCAN_FAILURES=0
+      
+      # Check Semgrep results
+      if [ -f semgrep-report-projectname.sarif ]; then
+        SEMGREP_ISSUES=$(jq '[.runs[].results[]] | length' semgrep-report-projectname.sarif 2>/dev/null || echo "0")
+        echo "🔍 Semgrep SAST: $SEMGREP_ISSUES issues found"
+        TOTAL_CRITICAL_ISSUES=$((TOTAL_CRITICAL_ISSUES + SEMGREP_ISSUES))
+        if [ "$SEMGREP_ISSUES" -gt 0 ]; then SCAN_FAILURES=$((SCAN_FAILURES + 1)); fi
+      else
+        echo "❌ Semgrep SARIF report not found"
+        SCAN_FAILURES=$((SCAN_FAILURES + 1))
+      fi
+      
+      # Check Trivy results
+      if [ -f sca-report-projectname.sarif ]; then
+        TRIVY_ISSUES=$(jq '[.runs[].results[]] | length' sca-report-projectname.sarif 2>/dev/null || echo "0")
+        echo "🛡️ Trivy Dependencies: $TRIVY_ISSUES vulnerabilities found"
+        TOTAL_CRITICAL_ISSUES=$((TOTAL_CRITICAL_ISSUES + TRIVY_ISSUES))
+        if [ "$TRIVY_ISSUES" -gt 0 ]; then SCAN_FAILURES=$((SCAN_FAILURES + 1)); fi
+      else
+        echo "❌ Trivy SARIF report not found"
+        SCAN_FAILURES=$((SCAN_FAILURES + 1))
+      fi
+      
+      # Check Gitleaks results
+      if [ -f gitleaks-projectname.sarif ]; then
+        GITLEAKS_ISSUES=$(jq '[.runs[].results[]] | length' gitleaks-projectname.sarif 2>/dev/null || echo "0")
+        echo "🔐 Gitleaks Secrets: $GITLEAKS_ISSUES secrets found"
+        TOTAL_CRITICAL_ISSUES=$((TOTAL_CRITICAL_ISSUES + GITLEAKS_ISSUES))
+        if [ "$GITLEAKS_ISSUES" -gt 0 ]; then SCAN_FAILURES=$((SCAN_FAILURES + 1)); fi
+      else
+        echo "❌ Gitleaks SARIF report not found"
+        SCAN_FAILURES=$((SCAN_FAILURES + 1))
+      fi
+      
+      echo ""
+      echo "📊 SECURITY GATE SUMMARY:"
+      echo "├── Total Security Issues: $TOTAL_CRITICAL_ISSUES"
+      echo "├── Failed Security Scans: $SCAN_FAILURES/3"
+      echo "└── DefectDojo Dashboard: $DEFECTDOJO_URL"
+      echo ""
+      
+      # Branch protection logic
+      if [ "$CI_COMMIT_BRANCH" = "main" ] || [ "$CI_COMMIT_BRANCH" = "develop" ]; then
+        echo "🔒 PROTECTED BRANCH DETECTED: $CI_COMMIT_BRANCH"
+        if [ "$TOTAL_CRITICAL_ISSUES" -gt 0 ] || [ "$SCAN_FAILURES" -gt 0 ]; then
+          echo ""
+          echo "🚫 BRANCH PROTECTION ACTIVATED"
+          echo "❌ Code push/merge REJECTED due to security issues"
+          echo ""
+          echo "📋 Required Actions:"
+          echo "├── Fix all security vulnerabilities"
+          echo "├── Remove hardcoded secrets"
+          echo "├── Update vulnerable dependencies"
+          echo "└── Re-run security scans"
+          echo ""
+          echo "🔗 View detailed findings: $DEFECTDOJO_URL"
+          exit 1
+        else
+          echo "✅ SECURITY GATE PASSED - No issues detected"
+          echo "✅ Code push/merge APPROVED for protected branch"
+        fi
+      else
+        echo "🔓 Feature branch: $CI_COMMIT_BRANCH (non-protected)"
+        if [ "$TOTAL_CRITICAL_ISSUES" -gt 0 ]; then
+          echo "⚠️  Security issues detected but allowing push to feature branch"
+          echo "🔔 Please fix issues before merging to main/develop"
+        else
+          echo "✅ No security issues detected"
+        fi
+      fi
+  dependencies:
+    - semgrep
+    - trivy
+    - gitleaks
+  rules:
+    # Always run security gate for protected branches
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+    # Run on merge requests targeting protected branches
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # Run on manual triggers
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+  allow_failure: false  # This job MUST pass for branch protection
+
+# Security Summary Job
+security_summary:
+  stage: report
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache jq curl
+  script:
+    - echo "=== SECURITY SCAN SUMMARY ==="
+    - echo "Pipeline:" $CI_PIPELINE_ID "| Commit:" $CI_COMMIT_SHORT_SHA "| Branch:" $CI_COMMIT_BRANCH
+    - echo "Blocking Mode:" $BLOCKING_MODE
+    - echo ""
+    - |
+      # Download and analyze artifacts
+      TOTAL_ISSUES=0
+      
+      # Check Semgrep results
+      if [ -f semgrep-report-projectname.sarif ]; then
+        SEMGREP_ISSUES=$(jq '[.runs[].results[]] | length' semgrep-report-projectname.sarif 2>/dev/null || echo "0")
+        echo "🔍 Semgrep (SAST): $SEMGREP_ISSUES issues found"
+        TOTAL_ISSUES=$((TOTAL_ISSUES + SEMGREP_ISSUES))
+      fi
+      
+      # Check Trivy results  
+      if [ -f sca-report-projectname.sarif ]; then
+        TRIVY_ISSUES=$(jq '[.runs[].results[]] | length' sca-report-projectname.sarif 2>/dev/null || echo "0")
+        echo "🛡️ Trivy (Dependencies): $TRIVY_ISSUES vulnerabilities found"
+        TOTAL_ISSUES=$((TOTAL_ISSUES + TRIVY_ISSUES))
+      fi
+      
+      # Check Gitleaks results
+      if [ -f gitleaks-projectname.sarif ]; then
+        GITLEAKS_ISSUES=$(jq '[.runs[].results[]] | length' gitleaks-projectname.sarif 2>/dev/null || echo "0")
+        echo "🔐 Gitleaks (Secrets): $GITLEAKS_ISSUES secrets found"
+        TOTAL_ISSUES=$((TOTAL_ISSUES + GITLEAKS_ISSUES))
+      fi
+      
+      echo ""
+      echo "📊 Total Security Issues: $TOTAL_ISSUES"
+      
+      if [ "$TOTAL_ISSUES" -gt 0 ]; then
+        echo "❌ Security issues detected!"
+        echo "📋 Check DefectDojo for detailed findings: $DEFECTDOJO_URL"
+        if [ "$BLOCKING_MODE" = "true" ]; then
+          echo "🚫 Pipeline blocked due to security issues"
+        else
+          echo "⚠️ Pipeline allowed to continue (non-blocking mode)"
+        fi
+      else
+        echo "✅ No security issues detected!"
+      fi
+  dependencies:
+    - semgrep
+    - trivy  
+    - gitleaks
+  when: always
+  allow_failure: true
