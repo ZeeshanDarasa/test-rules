@@ -174,7 +174,7 @@ jobs:
                 -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
                 -F "scan_type=$SCAN_TYPE" \
                 -F "file=@$FILE" \
-                -F "product_name=${{ github.repository }}" \
+                -F "product_name=github" \
                 -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
                 -F "test_title=$TITLE - ${{ github.sha }}" \
                 -F "active=true" \
