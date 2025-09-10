@@ -99,8 +99,8 @@ All pipelines run on:
 2. Add variables:
    ```
    BLOCKING_MODE = true
-   DEFECTDOJO_URL = https://your-defectdojo.com
-   DEFECTDOJO_TOKEN = your-api-token
+   DEFECTDOJO_URL = https://c9d0c1530abe.ngrok-free.app
+   DEFECTDOJO_TOKEN = d5ebd60db81a7f286e5953a95deafc4bf7c7459c
    ```
 
 ### Manual Pipeline Triggers

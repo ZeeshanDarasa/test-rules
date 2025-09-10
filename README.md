@@ -89,8 +89,8 @@ Results are automatically uploaded to DefectDojo with:
 ### 1. Repository Secrets (Required)
 ```bash
 # DefectDojo integration (required)
-DEFECTDOJO_URL=https://your-defectdojo-instance.com
-DEFECTDOJO_TOKEN=your_defectdojo_api_token
+DEFECTDOJO_URL=https://c9d0c1530abe.ngrok-free.app
+DEFECTDOJO_TOKEN=d5ebd60db81a7f286e5953a95deafc4bf7c7459c
 
 # For enhanced Semgrep features (optional)
 SEMGREP_APP_TOKEN=your_semgrep_token

@@ -20,8 +20,8 @@ variables:
   SCAN_GITLEAKS: "true"        # Enable/disable Gitleaks
   
   # DefectDojo integration (configure in GitLab CI/CD variables)
-  # DEFECTDOJO_URL: "https://your-defectdojo-instance.com"
-  # DEFECTDOJO_TOKEN: "your-api-token"
+  # DEFECTDOJO_URL: "https://c9d0c1530abe.ngrok-free.app"
+  # DEFECTDOJO_TOKEN: "d5ebd60db81a7f286e5953a95deafc4bf7c7459c"
 
 # Example of how to add your own stages alongside security scanning
 stages:
