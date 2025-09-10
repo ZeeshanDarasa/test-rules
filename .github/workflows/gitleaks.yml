@@ -108,7 +108,16 @@ jobs:
           if [ -f gitleaks-results.sarif ]; then
             if [ -n "${{ secrets.DEFECTDOJO_URL }}" ] && [ -n "${{ secrets.DEFECTDOJO_TOKEN }}" ]; then
               echo "Uploading results to DefectDojo..."
-              curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              # Debug URL
+              DEFECTDOJO_URL="${{ secrets.DEFECTDOJO_URL }}"
+              echo "Debug: DefectDojo URL = '$DEFECTDOJO_URL'"
+              echo "Debug: URL length = ${#DEFECTDOJO_URL}"
+              
+              # Clean URL (remove any whitespace)
+              DEFECTDOJO_URL=$(echo "$DEFECTDOJO_URL" | tr -d '[:space:]')
+              echo "Debug: Cleaned URL = '$DEFECTDOJO_URL'"
+              
+              curl -X POST "${DEFECTDOJO_URL}/api/v2/import-scan/" \
                 -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
                 -F "scan_type=Gitleaks Scan" \
                 -F "file=@gitleaks-results.sarif" \
