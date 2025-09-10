@@ -97,49 +97,18 @@ jobs:
               RANDOM_SUFFIX=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 6 | head -n 1)
               ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)-${RANDOM_SUFFIX}"
               
-              # Step 1: Create/Get Product
-              echo "Creating/Getting product: $PRODUCT_NAME"
-              PRODUCT_RESPONSE=$(curl -s -X GET "${DEFECTDOJO_URL}/api/v2/products/?name=${PRODUCT_NAME}" \
-                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}")
-              
-              PRODUCT_COUNT=$(echo "$PRODUCT_RESPONSE" | jq -r '.count // 0')
-              
-              if [ "$PRODUCT_COUNT" -eq 0 ]; then
-                echo "Product doesn't exist, creating it..."
-                curl -s -X POST "${DEFECTDOJO_URL}/api/v2/products/" \
-                  -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"name\":\"${PRODUCT_NAME}\",\"description\":\"GitHub Security Scans\",\"prod_type\":1}" > /dev/null
-                echo "Product created successfully"
-              else
-                echo "Product already exists"
+              # Test DefectDojo connectivity first
+              echo "Testing DefectDojo connectivity..."
+              if ! curl -s --max-time 10 --connect-timeout 5 "${DEFECTDOJO_URL}/api/v2/" \
+                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" > /dev/null; then
+                echo "ERROR: Cannot connect to DefectDojo API. Skipping upload."
+                exit 0
               fi
+              echo "DefectDojo API is accessible"
               
-              # Get Product ID
-              PRODUCT_ID=$(curl -s -X GET "${DEFECTDOJO_URL}/api/v2/products/?name=${PRODUCT_NAME}" \
-                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" | jq -r '.results[0].id')
-              
-              # Step 2: Create/Get Engagement
-              echo "Creating/Getting engagement: $ENGAGEMENT_NAME"
-              ENGAGEMENT_RESPONSE=$(curl -s -X GET "${DEFECTDOJO_URL}/api/v2/engagements/?name=${ENGAGEMENT_NAME}&product=${PRODUCT_ID}" \
-                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}")
-              
-              ENGAGEMENT_COUNT=$(echo "$ENGAGEMENT_RESPONSE" | jq -r '.count // 0')
-              
-              if [ "$ENGAGEMENT_COUNT" -eq 0 ]; then
-                echo "Engagement doesn't exist, creating it..."
-                curl -s -X POST "${DEFECTDOJO_URL}/api/v2/engagements/" \
-                  -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"name\":\"${ENGAGEMENT_NAME}\",\"product\":${PRODUCT_ID},\"target_start\":\"$(date +%Y-%m-%d)\",\"target_end\":\"$(date -d '+30 days' +%Y-%m-%d)\"}" > /dev/null
-                echo "Engagement created successfully"
-              else
-                echo "Engagement already exists"
-              fi
-              
-              # Step 3: Upload Scan Results
+              # Upload Scan Results (import-scan creates product/engagement automatically)
               echo "Uploading scan results..."
-              curl -X POST "${DEFECTDOJO_URL}/api/v2/import-scan/" \
+              UPLOAD_RESPONSE=$(curl -s --max-time 120 --connect-timeout 10 -X POST "${DEFECTDOJO_URL}/api/v2/import-scan/" \
                 -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
                 -F "scan_type=Semgrep JSON Report" \
                 -F "file=@semgrep.sarif" \
@@ -149,7 +118,15 @@ jobs:
                 -F "active=true" \
                 -F "verified=false" \
                 -F "scan_date=$(date +%Y-%m-%d)" \
-                -F "tags=semgrep,sast,automated,github" || echo "DefectDojo upload failed"
+                -F "tags=semgrep,sast,automated,github" 2>/dev/null || echo '{"error": "Upload failed"}')
+              
+              echo "Debug: Upload response = $UPLOAD_RESPONSE"
+              
+              if echo "$UPLOAD_RESPONSE" | jq -e '.test_import' > /dev/null 2>&1; then
+                echo "✅ DefectDojo upload successful"
+              else
+                echo "❌ DefectDojo upload failed. Response: $UPLOAD_RESPONSE"
+              fi
               
               echo "DefectDojo upload completed"
             else
