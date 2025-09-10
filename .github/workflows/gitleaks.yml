@@ -106,17 +106,22 @@ jobs:
         if: always()
         run: |
           if [ -f gitleaks-results.sarif ]; then
-            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
-              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
-              -F "scan_type=Gitleaks Scan" \
-              -F "file=@gitleaks-results.sarif" \
-              -F "product_name=${{ github.repository }}" \
-              -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
-              -F "test_title=Gitleaks Secret - ${{ github.sha }}" \
-              -F "active=true" \
-              -F "verified=false" \
-              -F "scan_date=$(date +%Y-%m-%d)" \
-              -F "tags=gitleaks,secrets,credentials" || echo "DefectDojo upload failed"
+            if [ -n "${{ secrets.DEFECTDOJO_URL }}" ] && [ -n "${{ secrets.DEFECTDOJO_TOKEN }}" ]; then
+              echo "Uploading results to DefectDojo..."
+              curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+                -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+                -F "scan_type=Gitleaks Scan" \
+                -F "file=@gitleaks-results.sarif" \
+                -F "product_name=${{ github.repository }}" \
+                -F "engagement_name=Security Scan - $(date +%Y-%m-%d)" \
+                -F "test_title=Gitleaks Secret - ${{ github.sha }}" \
+                -F "active=true" \
+                -F "verified=false" \
+                -F "scan_date=$(date +%Y-%m-%d)" \
+                -F "tags=gitleaks,secrets,credentials" || echo "DefectDojo upload failed"
+            else
+              echo "DefectDojo secrets not configured - skipping upload"
+            fi
           fi
       
       - name: Upload SARIF artifact
