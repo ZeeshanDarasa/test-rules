@@ -172,7 +172,8 @@ jobs:
               
               # Set variables
               PRODUCT_NAME="github"
-              ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)"
+              RANDOM_SUFFIX=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 6 | head -n 1)
+              ENGAGEMENT_NAME="Security Scan - $(date +%Y-%m-%d)-${RANDOM_SUFFIX}"
               
               # Step 1: Create/Get Product
               echo "Creating/Getting product: $PRODUCT_NAME"
